@@ -1,0 +1,66 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    working_dir: /app/apps/api
+    command: pnpm start
+    environment:
+      RPC_URL: ${RPC_URL:-https://api.mainnet-beta.solana.com}
+      GRPC_ENDPOINT: ${GRPC_ENDPOINT:-http://grpc.solanavibestation.com:10000}
+      GRPC_TOKEN: ${GRPC_TOKEN:-}
+      GRPC_COMMITMENT: ${GRPC_COMMITMENT:-CONFIRMED}
+      INDEXER_PROGRAM_INCLUDE: ${INDEXER_PROGRAM_INCLUDE:-}
+      INDEXER_INDEX_ALL_SWAPS: ${INDEXER_INDEX_ALL_SWAPS:-false}
+      INDEXER_SUPPRESS_PROCESSING_ERRORS: ${INDEXER_SUPPRESS_PROCESSING_ERRORS:-false}
+      INDEXER_LOG_EMPTY_DECODES: ${INDEXER_LOG_EMPTY_DECODES:-true}
+      INDEXER_EMPTY_DECODE_ONLY_TARGET: ${INDEXER_EMPTY_DECODE_ONLY_TARGET:-true}
+      INDEXER_EMPTY_DECODE_INCLUDE_FAILED: ${INDEXER_EMPTY_DECODE_INCLUDE_FAILED:-false}
+      INDEXER_EMPTY_DECODE_INCLUDE_NOISE_LOGS: ${INDEXER_EMPTY_DECODE_INCLUDE_NOISE_LOGS:-false}
+      INDEXER_EMPTY_DECODE_INCLUDE_SETUP_ONLY: ${INDEXER_EMPTY_DECODE_INCLUDE_SETUP_ONLY:-false}
+      INDEXER_LOG_TOKEN_DISCOVERY: ${INDEXER_LOG_TOKEN_DISCOVERY:-true}
+      INDEXER_LOG_FEE_CONFIG: ${INDEXER_LOG_FEE_CONFIG:-true}
+      INDEXER_LOG_MIGRATIONS: ${INDEXER_LOG_MIGRATIONS:-true}
+      INDEXER_LOG_SWAPS: ${INDEXER_LOG_SWAPS:-true}
+      INDEXER_LOG_TRANSFERS: ${INDEXER_LOG_TRANSFERS:-true}
+      TARGET_FEE_RECEIVER_WALLET: ${TARGET_FEE_RECEIVER_WALLET:-ReplaceWithSolanaWallet}
+      BAGS_API_BASE_URL: ${BAGS_API_BASE_URL:-https://public-api-v2.bags.fm}
+      BAGS_API_KEY: ${BAGS_API_KEY:-}
+      CLAIM_SYNC_INTERVAL_SECONDS: ${CLAIM_SYNC_INTERVAL_SECONDS:-60}
+      CLAIM_REQUEST_TRANSACTIONS: ${CLAIM_REQUEST_TRANSACTIONS:-true}
+      TOKEN_METADATA_ONCHAIN_TIMEOUT_MS: ${TOKEN_METADATA_ONCHAIN_TIMEOUT_MS:-4000}
+      TOKEN_METADATA_SYNC_INTERVAL_SECONDS: ${TOKEN_METADATA_SYNC_INTERVAL_SECONDS:-120}
+      TOKEN_METADATA_SYNC_BATCH_SIZE: ${TOKEN_METADATA_SYNC_BATCH_SIZE:-25}
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/bags_rewards
+      REDIS_URL: redis://redis:6379
+      DRAW_INTERVAL_MINUTES: ${DRAW_INTERVAL_MINUTES:-15}
+      WINNER_COOLDOWN_DRAWS: ${WINNER_COOLDOWN_DRAWS:-8}
+      REWARD_PERCENT_MIN: ${REWARD_PERCENT_MIN:-0.1}
+      REWARD_PERCENT_MAX: ${REWARD_PERCENT_MAX:-5}
+      REWARD_DRY_RUN: ${REWARD_DRY_RUN:-true}
+      REWARD_PAYER_SECRET_KEY: ${REWARD_PAYER_SECRET_KEY:-}
+      PORT: ${PORT:-4000}
+    ports:
+      - "4000:4000"
+    depends_on:
+      - postgres
+      - redis
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: bags_rewards
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres-data:

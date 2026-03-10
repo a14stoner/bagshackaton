@@ -1,0 +1,23 @@
+{
+  "name": "@bags/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "format": "prettier --check \"src/**/*.{ts,tsx}\""
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.30.1",
+    "@solana/web3.js": "^1.98.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "prettier": "^3.5.3",
+    "vitest": "^3.0.9"
+  }
+}
