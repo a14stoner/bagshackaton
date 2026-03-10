@@ -41,7 +41,7 @@ services:
       REWARD_PAYER_SECRET_KEY: ${REWARD_PAYER_SECRET_KEY:-}
       PORT: ${PORT:-4000}
     ports:
-      - "4000:4000"
+      - "${PORT}:${PORT}"
     depends_on:
       - postgres
       - redis
@@ -52,15 +52,15 @@ services:
       POSTGRES_DB: bags_rewards
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"
+    #ports:
+    #  - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    #ports:
+    #  - "6379:6379"
 
 volumes:
   postgres-data:

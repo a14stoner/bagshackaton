@@ -15,6 +15,10 @@ export class BagsIndexer {
   private rawUpdateCount = 0;
   private decodedEventCount = 0;
   private emptyDecodeCount = 0;
+  private rawUpdatesSinceLastLog = 0;
+  private decodedEventsSinceLastLog = 0;
+  private emptyDecodesSinceLastLog = 0;
+  private throughputTimer: NodeJS.Timeout | null = null;
 
   constructor() {
     this.processor = new IndexerEventProcessor(env.TARGET_FEE_RECEIVER_WALLET);
@@ -29,11 +33,31 @@ export class BagsIndexer {
       },
       "Yellowstone indexer booted"
     );
+    this.throughputTimer = setInterval(() => {
+      if (!this.running) {
+        return;
+      }
+      logger.info(
+        {
+          txPerSecond: this.rawUpdatesSinceLastLog,
+          decodedEventsPerSecond: this.decodedEventsSinceLastLog,
+          emptyDecodesPerSecond: this.emptyDecodesSinceLastLog
+        },
+        "Yellowstone throughput"
+      );
+      this.rawUpdatesSinceLastLog = 0;
+      this.decodedEventsSinceLastLog = 0;
+      this.emptyDecodesSinceLastLog = 0;
+    }, 1000);
     void this.runLoop();
   }
 
   async stop(): Promise<void> {
     this.running = false;
+    if (this.throughputTimer) {
+      clearInterval(this.throughputTimer);
+      this.throughputTimer = null;
+    }
     if (this.stream) {
       this.stream.end?.();
       this.stream.destroy?.();
@@ -81,11 +105,13 @@ export class BagsIndexer {
     await new Promise<void>((resolve, reject) => {
       this.stream.on("data", (update: unknown) => {
         this.rawUpdateCount += 1;
+        this.rawUpdatesSinceLastLog += 1;
         this.processingQueue = this.processingQueue
           .then(async () => {
             const events = parseYellowstoneUpdate(update as any);
             if (events.length === 0) {
               this.emptyDecodeCount += 1;
+              this.emptyDecodesSinceLastLog += 1;
               const summary = summarizeYellowstoneUpdate(update as any) as EmptyDecodeSummary;
               if (shouldLogEmptyDecodeSummary(summary) && (this.emptyDecodeCount <= 20 || this.emptyDecodeCount % 100 === 0)) {
                 logger.info(
@@ -101,16 +127,7 @@ export class BagsIndexer {
             }
 
             this.decodedEventCount += events.length;
-            if (this.rawUpdateCount % 100 === 0) {
-              logger.info(
-                {
-                  rawUpdateCount: this.rawUpdateCount,
-                  decodedEventCount: this.decodedEventCount,
-                  emptyDecodeCount: this.emptyDecodeCount
-                },
-                "Yellowstone stream progress"
-              );
-            }
+            this.decodedEventsSinceLastLog += events.length;
             for (const event of events) {
               await this.processor.process(event);
             }

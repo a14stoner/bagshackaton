@@ -107,6 +107,7 @@ type AnchorInstructionMatch = {
   programId: string;
   name: string;
   data: Record<string, unknown>;
+  accounts: string[];
 };
 
 export function parseYellowstoneUpdate(update: YellowstoneUpdate): IndexedEvent[] {
@@ -212,6 +213,13 @@ function parseEncodedTransaction(
 
   for (const event of anchorEvents.feeShareV2) {
     const feeConfigEvent = buildFeeConfiguredEventFromAnchorEvent(event, signature, slot, occurredAt);
+    if (feeConfigEvent) {
+      events.push(feeConfigEvent);
+    }
+  }
+
+  for (const match of instructionMatches.feeShareV2) {
+    const feeConfigEvent = buildFeeConfiguredEventFromFeeInstruction(match, signature, slot, occurredAt);
     if (feeConfigEvent) {
       events.push(feeConfigEvent);
     }
@@ -522,7 +530,8 @@ function extractAnchorInstructionMatches(decoded: EncodedJsonTransaction, accoun
           source: instruction.source,
           programId: instruction.programId,
           name: decodedInstruction.name,
-          data: decodedInstruction.data
+          data: decodedInstruction.data,
+          accounts: instruction.accounts
         });
       }
       continue;
@@ -538,7 +547,8 @@ function extractAnchorInstructionMatches(decoded: EncodedJsonTransaction, accoun
           source: instruction.source,
           programId: instruction.programId,
           name: decodedInstruction.name,
-          data: decodedInstruction.data
+          data: decodedInstruction.data,
+          accounts: instruction.accounts
         });
       }
       continue;
@@ -554,7 +564,8 @@ function extractAnchorInstructionMatches(decoded: EncodedJsonTransaction, accoun
           source: instruction.source,
           programId: instruction.programId,
           name: decodedInstruction.name,
-          data: decodedInstruction.data
+          data: decodedInstruction.data,
+          accounts: instruction.accounts
         });
       }
     }
@@ -602,16 +613,37 @@ function collectInstructions(decoded: EncodedJsonTransaction, accountKeys: strin
   const topLevel = (decoded.transaction?.message?.instructions ?? []).map((ix) => ({
     source: "message" as const,
     programId: accountKeys[ix.programIdIndex] ?? "",
-    data: ix.data
+    data: ix.data,
+    accounts: resolveInstructionAccounts(ix.accounts, accountKeys)
   }));
   const inner = (decoded.meta?.innerInstructions ?? []).flatMap((group) =>
     (group.instructions ?? []).map((ix) => ({
       source: "inner" as const,
       programId: accountKeys[ix.programIdIndex] ?? "",
-      data: ix.data
+      data: ix.data,
+      accounts: resolveInstructionAccounts(ix.accounts, accountKeys)
     }))
   );
   return [...topLevel, ...inner];
+}
+
+function resolveInstructionAccounts(
+  accounts: EncodedInstruction["accounts"] | unknown,
+  accountKeys: string[]
+): string[] {
+  if (Array.isArray(accounts)) {
+    return accounts
+      .map((index) => accountKeys[Number(index)] ?? "")
+      .filter(Boolean);
+  }
+
+  if (accounts && typeof accounts === "object") {
+    return Object.values(accounts as Record<string, unknown>)
+      .map((index) => accountKeys[Number(index)] ?? "")
+      .filter(Boolean);
+  }
+
+  return [];
 }
 
 function getProgramInstructionCounts(decoded: EncodedJsonTransaction, accountKeys: string[]) {
@@ -669,6 +701,59 @@ function buildFeeConfiguredEventFromAnchorEvent(
     .filter((entry) => entry.wallet && Number.isFinite(entry.allocationBps));
 
   if (receivers.length === 0) {
+    return null;
+  }
+
+  return {
+    kind: "fee_configured",
+    mint: tokenMint,
+    feeConfigAccount,
+    receivers,
+    slot,
+    signature,
+    occurredAt
+  };
+}
+
+function buildFeeConfiguredEventFromFeeInstruction(
+  instruction: AnchorInstructionMatch,
+  signature: string,
+  slot: bigint,
+  occurredAt: Date
+): IndexedEvent | null {
+  const instructionName = instruction.name.toLowerCase();
+  if (instructionName !== "create_fee_config") {
+    return null;
+  }
+
+  const tokenMint = instruction.accounts.find((account) => isCandidateTokenMint(account));
+  if (!tokenMint) {
+    return null;
+  }
+
+  const params = (instruction.data.params as Record<string, unknown> | undefined) ?? {};
+  const bps = toNumericArray(params.bps);
+  if (bps.length === 0) {
+    return null;
+  }
+
+  const candidateClaimers = instruction.accounts
+    .slice(-bps.length)
+    .filter((account) => isLikelyWallet(account))
+    .slice(0, bps.length);
+  if (candidateClaimers.length !== bps.length) {
+    return null;
+  }
+
+  const receivers = candidateClaimers
+    .map((wallet, index) => ({ wallet, allocationBps: Math.max(0, Math.floor(bps[index] ?? 0)) }))
+    .filter((entry) => Number.isFinite(entry.allocationBps));
+  if (receivers.length !== bps.length) {
+    return null;
+  }
+
+  const feeConfigAccount = deriveFeeShareConfigPda(tokenMint);
+  if (!feeConfigAccount) {
     return null;
   }
 
@@ -928,6 +1013,18 @@ function toBigInt(value: number | string | bigint): bigint {
 
 function toDate(blockTime: number | string | null | undefined): Date {
   return blockTime ? new Date(Number(blockTime) * 1000) : new Date();
+}
+
+function deriveFeeShareConfigPda(baseMint: string): string | null {
+  try {
+    const [pda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("fee_share_config"), new PublicKey(baseMint).toBuffer(), new PublicKey(PROGRAM_IDS.wsol).toBuffer()],
+      new PublicKey(PROGRAM_IDS.feeShareV2)
+    );
+    return pda.toBase58();
+  } catch {
+    return null;
+  }
 }
 
 function normalizeErrorValue(value: unknown): string | null {
