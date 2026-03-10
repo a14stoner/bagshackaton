@@ -1,4 +1,4 @@
-import { Connection } from "@solana/web3.js";
+import { Connection, PublicKey } from "@solana/web3.js";
 import { isTrackedFeeReceiver } from "@bags/shared";
 import { env } from "../config/env";
 import { applyLedgerEvent, type HolderState } from "../modules/holders/accounting";
@@ -20,6 +20,9 @@ import type { IndexedEvent } from "./types";
 type HolderCache = Map<string, HolderState>;
 const metadataConnection = new Connection(env.RPC_URL, "confirmed");
 const metadataSyncInFlight = new Set<string>();
+const feeConfigProbeInFlight = new Set<string>();
+const FEE_SHARE_V2_PROGRAM_ID = new PublicKey("FEE2tBhCKAt7shrod19QttSVREUYPiyMzoku1mL1gqVK");
+const WSOL_MINT = new PublicKey("So11111111111111111111111111111111111111112");
 
 export class IndexerEventProcessor {
   private holders: HolderCache = new Map();
@@ -40,6 +43,7 @@ export class IndexerEventProcessor {
         totalSupply: event.totalSupply
       });
       void syncTokenMetadataNow(event.mint);
+      void probeFeeConfigNow(event.mint);
       const inserted = await insertNormalizedEvent({
         id: `${event.signature}:token_discovered:${event.mint}`,
         tokenMint: event.mint,
@@ -286,6 +290,61 @@ async function syncTokenMetadataNow(mint: string): Promise<void> {
   } finally {
     metadataSyncInFlight.delete(mint);
   }
+}
+
+async function probeFeeConfigNow(mint: string): Promise<void> {
+  if (feeConfigProbeInFlight.has(mint)) {
+    return;
+  }
+  feeConfigProbeInFlight.add(mint);
+
+  const retries = 4;
+  const delayMs = 2000;
+
+  try {
+    logger.info({ mint }, "Fee config sync requested (immediate)");
+    const feeConfigAccount = deriveFeeShareConfigPda(mint);
+
+    for (let attempt = 1; attempt <= retries; attempt += 1) {
+      const accountInfo = await metadataConnection.getAccountInfo(feeConfigAccount, "confirmed");
+      if (accountInfo?.data) {
+        logger.info(
+          {
+            mint,
+            feeConfigAccount: feeConfigAccount.toBase58(),
+            dataLength: accountInfo.data.length,
+            attempt
+          },
+          "Fee config account detected (immediate)"
+        );
+        return;
+      }
+
+      if (attempt < retries) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+
+    logger.info(
+      {
+        mint,
+        feeConfigAccount: feeConfigAccount.toBase58()
+      },
+      "Fee config account not available yet (immediate)"
+    );
+  } catch (error) {
+    logger.warn({ err: error, mint }, "Immediate fee config sync probe failed");
+  } finally {
+    feeConfigProbeInFlight.delete(mint);
+  }
+}
+
+function deriveFeeShareConfigPda(baseMint: string): PublicKey {
+  const [pda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("fee_share_config"), new PublicKey(baseMint).toBuffer(), WSOL_MINT.toBuffer()],
+    FEE_SHARE_V2_PROGRAM_ID
+  );
+  return pda;
 }
 
 function logIndexedEvent(event: IndexedEvent): void {
