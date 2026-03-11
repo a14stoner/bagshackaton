@@ -27,7 +27,13 @@ export async function upsertToken(input: CreateTokenInput): Promise<void> {
          image_uri = COALESCE(EXCLUDED.image_uri, tokens.image_uri),
          metadata_synced_at = COALESCE(EXCLUDED.metadata_synced_at, tokens.metadata_synced_at),
          fee_config_account = COALESCE(EXCLUDED.fee_config_account, tokens.fee_config_account),
-         status = EXCLUDED.status`,
+         status = CASE
+           WHEN tokens.status = 'MIGRATED' THEN 'MIGRATED'
+           WHEN EXCLUDED.status = 'MIGRATED' THEN 'MIGRATED'
+           WHEN tokens.status = 'TRACKED' AND EXCLUDED.status = 'DISCOVERED' THEN 'TRACKED'
+           WHEN EXCLUDED.status = 'TRACKED' THEN 'TRACKED'
+           ELSE EXCLUDED.status
+         END`,
     [
       input.mint,
       input.symbol,
