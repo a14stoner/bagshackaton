@@ -41,9 +41,11 @@ type EncodedTokenBalance = {
 };
 
 type EncodedInstruction = {
-  accounts: Array<number | string>;
+  accounts?: Array<number | string> | Record<string, unknown>;
   data: string;
-  programIdIndex: number;
+  programIdIndex?: number;
+  programId?: string;
+  program?: string;
 };
 
 type EncodedInnerInstructionGroup = {
@@ -659,19 +661,32 @@ function decodeAnchorEventFromInstructionData(
 function collectInstructions(decoded: EncodedJsonTransaction, accountKeys: string[]) {
   const topLevel = (decoded.transaction?.message?.instructions ?? []).map((ix) => ({
     source: "message" as const,
-    programId: accountKeys[ix.programIdIndex] ?? "",
+    programId: resolveInstructionProgramId(ix, accountKeys),
     data: ix.data,
     accounts: resolveInstructionAccounts(ix.accounts, accountKeys)
   }));
   const inner = (decoded.meta?.innerInstructions ?? []).flatMap((group) =>
     (group.instructions ?? []).map((ix) => ({
       source: "inner" as const,
-      programId: accountKeys[ix.programIdIndex] ?? "",
+      programId: resolveInstructionProgramId(ix, accountKeys),
       data: ix.data,
       accounts: resolveInstructionAccounts(ix.accounts, accountKeys)
     }))
   );
   return [...topLevel, ...inner];
+}
+
+function resolveInstructionProgramId(ix: EncodedInstruction, accountKeys: string[]): string {
+  if (typeof ix.programId === "string" && ix.programId.length > 0) {
+    return ix.programId;
+  }
+  if (typeof ix.program === "string" && ix.program.length > 0) {
+    return ix.program;
+  }
+  if (typeof ix.programIdIndex === "number") {
+    return accountKeys[ix.programIdIndex] ?? "";
+  }
+  return "";
 }
 
 function resolveInstructionAccounts(
@@ -680,7 +695,19 @@ function resolveInstructionAccounts(
 ): string[] {
   if (Array.isArray(accounts)) {
     return accounts
-      .map((index) => accountKeys[Number(index)] ?? "")
+      .map((entry) => {
+        if (typeof entry === "number") {
+          return accountKeys[entry] ?? "";
+        }
+        if (typeof entry === "string") {
+          const asNumber = Number(entry);
+          if (Number.isFinite(asNumber) && accountKeys[asNumber]) {
+            return accountKeys[asNumber] ?? "";
+          }
+          return entry;
+        }
+        return "";
+      })
       .filter(Boolean);
   }
 
