@@ -54,6 +54,8 @@ export const feeReceivers = pgTable(
   {
     tokenMint: text("token_mint").notNull().references(() => tokens.mint, { onDelete: "cascade" }),
     wallet: text("wallet").notNull(),
+    resolvedWallet: text("resolved_wallet"),
+    receiverType: text("receiver_type").notNull().default("wallet"),
     allocationBps: integer("allocation_bps").notNull(),
     isTarget: boolean("is_target").notNull().default(false)
   },

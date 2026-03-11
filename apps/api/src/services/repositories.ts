@@ -46,7 +46,13 @@ export async function upsertToken(input: CreateTokenInput): Promise<void> {
 
 export async function replaceFeeReceivers(input: {
   tokenMint: string;
-  receivers: { wallet: string; allocationBps: number; isTarget: boolean }[];
+  receivers: {
+    wallet: string;
+    allocationBps: number;
+    isTarget: boolean;
+    resolvedWallet?: string | null;
+    receiverType?: string;
+  }[];
 }): Promise<void> {
   const client = await pgPool.connect();
   try {
@@ -54,8 +60,15 @@ export async function replaceFeeReceivers(input: {
     await client.query("DELETE FROM fee_receivers WHERE token_mint = $1", [input.tokenMint]);
     for (const receiver of input.receivers) {
       await client.query(
-        "INSERT INTO fee_receivers (token_mint, wallet, allocation_bps, is_target) VALUES ($1,$2,$3,$4)",
-        [input.tokenMint, receiver.wallet, receiver.allocationBps, receiver.isTarget]
+        "INSERT INTO fee_receivers (token_mint, wallet, resolved_wallet, receiver_type, allocation_bps, is_target) VALUES ($1,$2,$3,$4,$5,$6)",
+        [
+          input.tokenMint,
+          receiver.wallet,
+          receiver.resolvedWallet ?? null,
+          receiver.receiverType ?? "wallet",
+          receiver.allocationBps,
+          receiver.isTarget
+        ]
       );
     }
     await client.query(

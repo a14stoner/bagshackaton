@@ -36,10 +36,15 @@ ALTER TABLE tokens ADD COLUMN IF NOT EXISTS metadata_synced_at TIMESTAMPTZ;
 CREATE TABLE IF NOT EXISTS fee_receivers (
   token_mint TEXT NOT NULL REFERENCES tokens(mint) ON DELETE CASCADE,
   wallet TEXT NOT NULL,
+  resolved_wallet TEXT,
+  receiver_type TEXT NOT NULL DEFAULT 'wallet',
   allocation_bps INTEGER NOT NULL,
   is_target BOOLEAN NOT NULL DEFAULT FALSE,
   PRIMARY KEY (token_mint, wallet)
 );
+
+ALTER TABLE fee_receivers ADD COLUMN IF NOT EXISTS resolved_wallet TEXT;
+ALTER TABLE fee_receivers ADD COLUMN IF NOT EXISTS receiver_type TEXT NOT NULL DEFAULT 'wallet';
 
 CREATE TABLE IF NOT EXISTS normalized_events (
   id TEXT PRIMARY KEY,

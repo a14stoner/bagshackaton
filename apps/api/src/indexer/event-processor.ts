@@ -15,6 +15,7 @@ import {
 } from "../services/repositories";
 import { fetchOffchainMetadata, fetchOnchainTokenMetadataWithTimeout } from "../services/token-metadata";
 import { logger } from "../services/logger";
+import { resolveFeeReceiver, type ResolvedFeeReceiver } from "./fee-receiver-resolver";
 import type { IndexedEvent } from "./types";
 
 type HolderCache = Map<string, HolderState>;
@@ -24,6 +25,7 @@ const feeConfigProbeInFlight = new Set<string>();
 const FEE_SHARE_V2_PROGRAM_ID = new PublicKey("FEE2tBhCKAt7shrod19QttSVREUYPiyMzoku1mL1gqVK");
 const WSOL_MINT = new PublicKey("So11111111111111111111111111111111111111112");
 const ZERO_PUBKEY = "11111111111111111111111111111111";
+const receiverResolutionCache = new Map<string, ResolvedFeeReceiver>();
 
 export class IndexerEventProcessor {
   private holders: HolderCache = new Map();
@@ -82,12 +84,15 @@ export class IndexerEventProcessor {
       if (!inserted) {
         return;
       }
+      const resolvedReceivers = await resolveReceiversWithOwners(event.receivers);
       await replaceFeeReceivers({
         tokenMint: event.mint,
-        receivers: event.receivers.map((receiver) => ({
+        receivers: resolvedReceivers.map((receiver) => ({
           wallet: receiver.wallet,
+          resolvedWallet: receiver.resolvedWallet,
+          receiverType: receiver.receiverType,
           allocationBps: receiver.allocationBps,
-          isTarget: isTrackedFeeReceiver([receiver], this.targetFeeReceiverWallet)
+          isTarget: isTrackedFeeReceiver([{ wallet: receiver.resolvedWallet, allocationBps: receiver.allocationBps }], this.targetFeeReceiverWallet)
         }))
       });
     }
@@ -333,12 +338,18 @@ async function probeFeeConfigNow(mint: string): Promise<void> {
           totalSupply: "1000000000",
           status: "DISCOVERED"
         });
+        const resolvedReceivers = await resolveReceiversWithOwners(decoded.receivers);
         await replaceFeeReceivers({
           tokenMint: mint,
-          receivers: decoded.receivers.map((receiver) => ({
+          receivers: resolvedReceivers.map((receiver) => ({
             wallet: receiver.wallet,
+            resolvedWallet: receiver.resolvedWallet,
+            receiverType: receiver.receiverType,
             allocationBps: receiver.allocationBps,
-            isTarget: isTrackedFeeReceiver([receiver], env.TARGET_FEE_RECEIVER_WALLET)
+            isTarget: isTrackedFeeReceiver(
+              [{ wallet: receiver.resolvedWallet, allocationBps: receiver.allocationBps }],
+              env.TARGET_FEE_RECEIVER_WALLET
+            )
           }))
         });
         await insertNormalizedEvent({
@@ -352,7 +363,7 @@ async function probeFeeConfigNow(mint: string): Promise<void> {
             kind: "fee_configured_probe",
             mint,
             feeConfigAccount: feeConfigAccount.toBase58(),
-            receivers: decoded.receivers
+            receivers: resolvedReceivers
           }
         });
 
@@ -360,8 +371,8 @@ async function probeFeeConfigNow(mint: string): Promise<void> {
           {
             mint,
             feeConfigAccount: feeConfigAccount.toBase58(),
-            receiverCount: decoded.receivers.length,
-            receivers: decoded.receivers,
+            receiverCount: resolvedReceivers.length,
+            receivers: resolvedReceivers,
             attempt
           },
           "Fee config synced from account (immediate)"
@@ -394,6 +405,33 @@ function deriveFeeShareConfigPda(baseMint: string): PublicKey {
     FEE_SHARE_V2_PROGRAM_ID
   );
   return pda;
+}
+
+async function resolveReceiversWithOwners(
+  receivers: Array<{ wallet: string; allocationBps: number }>
+): Promise<Array<{ wallet: string; resolvedWallet: string; receiverType: string; allocationBps: number }>> {
+  const resolved = await Promise.all(
+    receivers.map(async (receiver) => {
+      const cached = receiverResolutionCache.get(receiver.wallet);
+      if (cached) {
+        return {
+          wallet: receiver.wallet,
+          resolvedWallet: cached.resolvedWallet,
+          receiverType: cached.receiverType,
+          allocationBps: receiver.allocationBps
+        };
+      }
+      const resolvedReceiver = await resolveFeeReceiver(metadataConnection, receiver.wallet);
+      receiverResolutionCache.set(receiver.wallet, resolvedReceiver);
+      return {
+        wallet: receiver.wallet,
+        resolvedWallet: resolvedReceiver.resolvedWallet,
+        receiverType: resolvedReceiver.receiverType,
+        allocationBps: receiver.allocationBps
+      };
+    })
+  );
+  return resolved;
 }
 
 function decodeFeeShareConfigAccount(
