@@ -15,11 +15,14 @@ export async function resolveFeeReceiver(
   connection: Connection,
   wallet: string
 ): Promise<ResolvedFeeReceiver> {
+  let key: PublicKey;
+  let isOnCurve = false;
   try {
-    const key = new PublicKey(wallet);
+    key = new PublicKey(wallet);
+    isOnCurve = PublicKey.isOnCurve(key.toBytes());
     const accountInfo = await connection.getAccountInfo(key, "confirmed");
     if (!accountInfo) {
-      return { wallet, resolvedWallet: wallet, receiverType: "unknown" };
+      return { wallet, resolvedWallet: wallet, receiverType: isOnCurve ? "wallet" : "pda" };
     }
 
     const owner = accountInfo.owner.toBase58();
@@ -48,6 +51,6 @@ export async function resolveFeeReceiver(
 
     return { wallet, resolvedWallet: wallet, receiverType: "wallet" };
   } catch {
-    return { wallet, resolvedWallet: wallet, receiverType: "unknown" };
+    return { wallet, resolvedWallet: wallet, receiverType: isOnCurve ? "wallet" : "unknown" };
   }
 }
