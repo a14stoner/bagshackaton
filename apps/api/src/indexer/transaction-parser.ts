@@ -909,7 +909,14 @@ function dedupeEvents(events: IndexedEvent[]): IndexedEvent[] {
 }
 
 function isLikelyWallet(value: string): boolean {
-  return Boolean(value) && !isKnownProgramLike(value);
+  if (!value || isKnownProgramLike(value)) {
+    return false;
+  }
+  try {
+    return PublicKey.isOnCurve(new PublicKey(value).toBytes());
+  } catch {
+    return false;
+  }
 }
 
 function isCandidateTokenMint(value: string): boolean {
