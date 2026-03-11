@@ -269,6 +269,7 @@ export function summarizeYellowstoneUpdate(update: YellowstoneUpdate) {
         normalized.includes("program return:")
       );
     });
+  const candidateMints = extractCandidateTokenMints(decoded.meta);
 
   return {
     decoded: true,
@@ -290,8 +291,24 @@ export function summarizeYellowstoneUpdate(update: YellowstoneUpdate) {
       damm: anchorEvents.damm.map((event) => event.name),
       feeShareV2: anchorEvents.feeShareV2.map((event) => event.name)
     },
+    candidateMints,
     logMessagesSample
   };
+}
+
+function extractCandidateTokenMints(meta: EncodedJsonTransaction["meta"]): string[] {
+  const balances = [...(meta?.preTokenBalances ?? []), ...(meta?.postTokenBalances ?? [])];
+  const unique = new Set<string>();
+  for (const balance of balances) {
+    if (!isCandidateTokenMint(balance.mint)) {
+      continue;
+    }
+    unique.add(balance.mint);
+    if (unique.size >= 8) {
+      break;
+    }
+  }
+  return [...unique];
 }
 
 function buildSwapFromAnchor(
@@ -336,6 +353,17 @@ function buildSwapFromAnchor(
         solAmount = Math.abs(nativeDelta);
         side = nativeDelta < 0 ? "buy" : "sell";
       }
+    }
+  }
+
+  // Fallback: some routed swaps do not expose owner-level WSOL/native deltas.
+  // Use the largest absolute WSOL token delta in the tx so swap is still captured.
+  if (solAmount <= 0) {
+    const anyWsolDelta = getTokenBalanceDeltas(meta)
+      .filter((entry) => entry.mint === PROGRAM_IDS.wsol && entry.delta !== 0)
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))[0];
+    if (anyWsolDelta) {
+      solAmount = Math.abs(anyWsolDelta.delta);
     }
   }
 
@@ -832,7 +860,17 @@ function resolveTraderWallet(traderFromDeltas: string, accountKeys: string[], me
     }
   }
 
-  return best?.wallet ?? "";
+  if (best?.wallet) {
+    return best.wallet;
+  }
+
+  // Fallback to fee payer / first account key when delta-based owner discovery is unavailable.
+  const feePayer = accountKeys[0] ?? "";
+  if (isLikelyWallet(feePayer)) {
+    return feePayer;
+  }
+
+  return "";
 }
 
 function getResolvedAccountKeys(decoded: EncodedJsonTransaction): string[] {

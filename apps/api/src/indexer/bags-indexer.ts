@@ -1,6 +1,7 @@
 import { PublicKey } from "@solana/web3.js";
 import { env } from "../config/env";
 import { logger } from "../services/logger";
+import { hasTargetFeeReceiver } from "../services/repositories";
 import { buildTransactionSubscriptionRequest, createYellowstoneClient, openTransactionSubscription } from "./grpc-runtime";
 import { IndexerEventProcessor } from "./event-processor";
 import { parseYellowstoneUpdate, summarizeYellowstoneUpdate } from "./transaction-parser";
@@ -118,6 +119,18 @@ export class BagsIndexer {
               this.emptyDecodeCount += 1;
               this.emptyDecodesSinceLastLog += 1;
               const summary = summarizeYellowstoneUpdate(update as any) as EmptyDecodeSummary;
+              const trackedMints = await findTrackedCandidateMints(summary);
+              if (trackedMints.length > 0 && env.INDEXER_LOG_TRACKED_DECODE_MISSES) {
+                logger.warn(
+                  {
+                    rawUpdateCount: this.rawUpdateCount,
+                    emptyDecodeCount: this.emptyDecodeCount,
+                    trackedMints,
+                    summary
+                  },
+                  "Tracked token transaction failed to decode into indexed events"
+                );
+              }
               if (shouldLogEmptyDecodeSummary(summary) && (this.emptyDecodeCount <= 20 || this.emptyDecodeCount % 100 === 0)) {
                 logger.info(
                   {
@@ -164,7 +177,21 @@ type EmptyDecodeSummary = {
   hasNoiseLogs?: boolean;
   setupOnlyLogs?: boolean;
   hasTargetActivity?: boolean;
+  candidateMints?: string[];
 };
+
+async function findTrackedCandidateMints(summary: EmptyDecodeSummary): Promise<string[]> {
+  if (!summary.decoded || !summary.hasTargetActivity || !summary.candidateMints?.length) {
+    return [];
+  }
+  const checks = await Promise.all(
+    summary.candidateMints.map(async (mint) => ({
+      mint,
+      tracked: await hasTargetFeeReceiver(mint)
+    }))
+  );
+  return checks.filter((entry) => entry.tracked).map((entry) => entry.mint);
+}
 
 function shouldLogEmptyDecodeSummary(summary: EmptyDecodeSummary): boolean {
   if (!env.INDEXER_LOG_EMPTY_DECODES) {

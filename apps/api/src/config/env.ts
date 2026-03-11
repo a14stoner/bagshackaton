@@ -24,6 +24,7 @@ const envSchema = z.object({
   INDEXER_INDEX_ALL_SWAPS: booleanFromEnv(false),
   INDEXER_SUPPRESS_PROCESSING_ERRORS: booleanFromEnv(false),
   INDEXER_LOG_EMPTY_DECODES: booleanFromEnv(true),
+  INDEXER_LOG_TRACKED_DECODE_MISSES: booleanFromEnv(true),
   INDEXER_EMPTY_DECODE_ONLY_TARGET: booleanFromEnv(true),
   INDEXER_EMPTY_DECODE_INCLUDE_FAILED: booleanFromEnv(false),
   INDEXER_EMPTY_DECODE_INCLUDE_NOISE_LOGS: booleanFromEnv(false),
