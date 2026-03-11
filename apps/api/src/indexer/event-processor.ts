@@ -24,7 +24,6 @@ const metadataSyncInFlight = new Set<string>();
 const feeConfigProbeInFlight = new Set<string>();
 const FEE_SHARE_V2_PROGRAM_ID = new PublicKey("FEE2tBhCKAt7shrod19QttSVREUYPiyMzoku1mL1gqVK");
 const WSOL_MINT = new PublicKey("So11111111111111111111111111111111111111112");
-const ZERO_PUBKEY = "11111111111111111111111111111111";
 const receiverResolutionCache = new Map<string, ResolvedFeeReceiver>();
 
 export class IndexerEventProcessor {
@@ -314,68 +313,14 @@ async function probeFeeConfigNow(mint: string): Promise<void> {
     for (let attempt = 1; attempt <= retries; attempt += 1) {
       const accountInfo = await metadataConnection.getAccountInfo(feeConfigAccount, "confirmed");
       if (accountInfo?.data) {
-        const decoded = decodeFeeShareConfigAccount(accountInfo.data);
-        if (!decoded || decoded.receivers.length === 0) {
-          logger.warn(
-            {
-              mint,
-              feeConfigAccount: feeConfigAccount.toBase58(),
-              dataLength: accountInfo.data.length,
-              attempt
-            },
-            "Fee config account detected but could not decode receivers (immediate)"
-          );
-          return;
-        }
-
-        await upsertToken({
-          mint,
-          symbol: "UNKNOWN",
-          name: "Bags Token",
-          creationSlot: 0n,
-          createdAt: new Date(),
-          feeConfigAccount: feeConfigAccount.toBase58(),
-          totalSupply: "1000000000",
-          status: "DISCOVERED"
-        });
-        const resolvedReceivers = await resolveReceiversWithOwners(decoded.receivers);
-        await replaceFeeReceivers({
-          tokenMint: mint,
-          receivers: resolvedReceivers.map((receiver) => ({
-            wallet: receiver.wallet,
-            resolvedWallet: receiver.resolvedWallet,
-            receiverType: receiver.receiverType,
-            allocationBps: receiver.allocationBps,
-            isTarget: isTrackedFeeReceiver(
-              [{ wallet: receiver.resolvedWallet, allocationBps: receiver.allocationBps }],
-              env.TARGET_FEE_RECEIVER_WALLET
-            )
-          }))
-        });
-        await insertNormalizedEvent({
-          id: `fee-config-probe:${mint}:${feeConfigAccount.toBase58()}`,
-          tokenMint: mint,
-          type: "FEE_CONFIGURED",
-          signature: `fee-config-probe:${mint}`,
-          slot: 0n,
-          occurredAt: new Date(),
-          payload: {
-            kind: "fee_configured_probe",
-            mint,
-            feeConfigAccount: feeConfigAccount.toBase58(),
-            receivers: resolvedReceivers
-          }
-        });
-
         logger.info(
           {
             mint,
             feeConfigAccount: feeConfigAccount.toBase58(),
-            receiverCount: resolvedReceivers.length,
-            receivers: resolvedReceivers,
+            dataLength: accountInfo.data.length,
             attempt
           },
-          "Fee config synced from account (immediate)"
+          "Fee config account detected (immediate)"
         );
         return;
       }
@@ -410,7 +355,7 @@ function deriveFeeShareConfigPda(baseMint: string): PublicKey {
 async function resolveReceiversWithOwners(
   receivers: Array<{ wallet: string; allocationBps: number }>
 ): Promise<Array<{ wallet: string; resolvedWallet: string; receiverType: string; allocationBps: number }>> {
-  const resolved = await Promise.all(
+  return Promise.all(
     receivers.map(async (receiver) => {
       const cached = receiverResolutionCache.get(receiver.wallet);
       if (cached) {
@@ -421,6 +366,7 @@ async function resolveReceiversWithOwners(
           allocationBps: receiver.allocationBps
         };
       }
+
       const resolvedReceiver = await resolveFeeReceiver(metadataConnection, receiver.wallet);
       receiverResolutionCache.set(receiver.wallet, resolvedReceiver);
       return {
@@ -431,59 +377,6 @@ async function resolveReceiversWithOwners(
       };
     })
   );
-  return resolved;
-}
-
-function decodeFeeShareConfigAccount(
-  data: Buffer
-): { receivers: Array<{ wallet: string; allocationBps: number }> } | null {
-  const buffer = Buffer.from(data);
-  // Anchor discriminator (8) + FeeShareConfigHeader (176) + at least one claimer/bps pair.
-  const baseOffset = 8 + 176;
-  if (buffer.length < baseOffset + 34) {
-    return null;
-  }
-
-  const remaining = buffer.length - baseOffset;
-  const maxClaimers = Math.min(100, Math.floor(remaining / 34));
-  if (maxClaimers <= 0) {
-    return null;
-  }
-
-  const claimers: string[] = [];
-  let cursor = baseOffset;
-  for (let i = 0; i < maxClaimers; i += 1) {
-    const keyBytes = buffer.subarray(cursor, cursor + 32);
-    cursor += 32;
-    if (keyBytes.length < 32) {
-      break;
-    }
-    try {
-      claimers.push(new PublicKey(keyBytes).toBase58());
-    } catch {
-      claimers.push("");
-    }
-  }
-
-  const bps: number[] = [];
-  for (let i = 0; i < claimers.length; i += 1) {
-    if (cursor + 2 > buffer.length) {
-      break;
-    }
-    bps.push(buffer.readUInt16LE(cursor));
-    cursor += 2;
-  }
-
-  const receivers = claimers
-    .map((wallet, index) => ({ wallet, allocationBps: bps[index] ?? 0 }))
-    .filter((entry) => entry.wallet && entry.wallet !== ZERO_PUBKEY)
-    .filter((entry) => entry.allocationBps > 0);
-
-  if (receivers.length === 0) {
-    return null;
-  }
-
-  return { receivers };
 }
 
 function logIndexedEvent(event: IndexedEvent): void {
