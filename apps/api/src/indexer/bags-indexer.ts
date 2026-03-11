@@ -181,7 +181,7 @@ type EmptyDecodeSummary = {
 };
 
 async function findTrackedCandidateMints(summary: EmptyDecodeSummary): Promise<string[]> {
-  if (!summary.decoded || !summary.hasTargetActivity || !summary.candidateMints?.length) {
+  if (!summary.decoded || !summary.candidateMints?.length) {
     return [];
   }
   const checks = await Promise.all(
