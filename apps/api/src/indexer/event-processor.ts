@@ -97,9 +97,25 @@ export class IndexerEventProcessor {
     }
 
     if (event.kind === "swap") {
-      if (!env.INDEXER_INDEX_ALL_SWAPS && !(await hasTargetFeeReceiver(event.mint))) {
+      const isTrackedToken = await hasTargetFeeReceiver(event.mint);
+      if (!env.INDEXER_INDEX_ALL_SWAPS && !isTrackedToken) {
         logger.debug({ mint: event.mint, kind: event.kind, signature: event.signature }, "Skipping untracked token event");
         return;
+      }
+      if (isTrackedToken) {
+        logger.info(
+          {
+            mint: event.mint,
+            pool: event.pool,
+            side: event.side,
+            traderWallet: event.traderWallet,
+            amountIn: event.amountIn,
+            amountOut: event.amountOut,
+            signature: event.signature,
+            slot: event.slot.toString()
+          },
+          "Tracked token swap decoded"
+        );
       }
       await ensureTokenExists(event.mint, event.slot, event.occurredAt);
 

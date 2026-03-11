@@ -19,6 +19,7 @@ export class BagsIndexer {
   private decodedEventsSinceLastLog = 0;
   private emptyDecodesSinceLastLog = 0;
   private throughputTimer: NodeJS.Timeout | null = null;
+  private throughputLastLoggedAtMs = 0;
 
   constructor() {
     this.processor = new IndexerEventProcessor(env.TARGET_FEE_RECEIVER_WALLET);
@@ -37,18 +38,22 @@ export class BagsIndexer {
       if (!this.running) {
         return;
       }
+      const nowMs = Date.now();
+      const elapsedSeconds = Math.max(1, (nowMs - this.throughputLastLoggedAtMs) / 1000);
       logger.info(
         {
-          txPerSecond: this.rawUpdatesSinceLastLog,
-          decodedEventsPerSecond: this.decodedEventsSinceLastLog,
-          emptyDecodesPerSecond: this.emptyDecodesSinceLastLog
+          txPerSecond: Number((this.rawUpdatesSinceLastLog / elapsedSeconds).toFixed(2)),
+          decodedEventsPerSecond: Number((this.decodedEventsSinceLastLog / elapsedSeconds).toFixed(2)),
+          emptyDecodesPerSecond: Number((this.emptyDecodesSinceLastLog / elapsedSeconds).toFixed(2))
         },
         "Yellowstone throughput"
       );
       this.rawUpdatesSinceLastLog = 0;
       this.decodedEventsSinceLastLog = 0;
       this.emptyDecodesSinceLastLog = 0;
-    }, 1000);
+      this.throughputLastLoggedAtMs = nowMs;
+    }, 5000);
+    this.throughputLastLoggedAtMs = Date.now();
     void this.runLoop();
   }
 
