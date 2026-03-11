@@ -241,6 +241,7 @@ export function summarizeYellowstoneUpdate(update: YellowstoneUpdate) {
   const accountKeys = getResolvedAccountKeys(decoded);
   const anchorEvents = extractAnchorEvents(decoded, accountKeys);
   const instructionMatches = extractAnchorInstructionMatches(decoded, accountKeys);
+  const instructions = collectInstructions(decoded, accountKeys);
   const rawInstructionCounts = getProgramInstructionCounts(decoded, accountKeys);
   const targetInstructionCount = rawInstructionCounts.dynamic + rawInstructionCounts.damm + rawInstructionCounts.feeShareV2;
   const targetMatchCount =
@@ -270,6 +271,18 @@ export function summarizeYellowstoneUpdate(update: YellowstoneUpdate) {
       );
     });
   const candidateMints = extractCandidateTokenMints(decoded.meta);
+  const topLevelPrograms = unique(
+    instructions
+      .filter((instruction) => instruction.source === "message")
+      .map((instruction) => instruction.programId)
+      .filter(Boolean)
+  ).slice(0, 12);
+  const innerPrograms = unique(
+    instructions
+      .filter((instruction) => instruction.source === "inner")
+      .map((instruction) => instruction.programId)
+      .filter(Boolean)
+  ).slice(0, 16);
 
   return {
     decoded: true,
@@ -291,6 +304,8 @@ export function summarizeYellowstoneUpdate(update: YellowstoneUpdate) {
       damm: anchorEvents.damm.map((event) => event.name),
       feeShareV2: anchorEvents.feeShareV2.map((event) => event.name)
     },
+    topLevelPrograms,
+    innerPrograms,
     candidateMints,
     logMessagesSample
   };
@@ -309,6 +324,10 @@ function extractCandidateTokenMints(meta: EncodedJsonTransaction["meta"]): strin
     }
   }
   return [...unique];
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 function buildSwapFromAnchor(
