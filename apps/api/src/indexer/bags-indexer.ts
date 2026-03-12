@@ -169,10 +169,12 @@ export class BagsIndexer {
       });
     });
   }
+
 }
 
 type EmptyDecodeSummary = {
   decoded: boolean;
+  signature?: string;
   failed?: boolean;
   hasNoiseLogs?: boolean;
   setupOnlyLogs?: boolean;

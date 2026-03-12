@@ -81,6 +81,7 @@ type EncodedJsonTransaction = {
 const PROGRAM_IDS = {
   dammV2: "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG",
   dynamicBondingCurve: "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN",
+  axiomTrade: "FLASHX8DrLbgeR8FcfNV1F5krxYcYMUdBkrP1EPBtxB9",
   wsol: "So11111111111111111111111111111111111111112",
   usdc: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
   usdt: "Es9vMFrzaCERmJfrF4H2NQ6KxuxMxDPk9vywgqbiZ9er",
@@ -224,6 +225,14 @@ function parseEncodedTransaction(
     const feeConfigEvent = buildFeeConfiguredEventFromFeeInstruction(match, signature, slot, occurredAt);
     if (feeConfigEvent) {
       events.push(feeConfigEvent);
+    }
+  }
+
+  if (!swapDetected) {
+    const routedSwap = buildRoutedSwapFromLogsAndBalances(decoded.meta, accountKeys, signature, slot, occurredAt);
+    if (routedSwap) {
+      swapDetected = true;
+      events.push(routedSwap);
     }
   }
 
@@ -402,6 +411,83 @@ function buildSwapFromAnchor(
     return null;
   }
 
+  return {
+    kind: "swap",
+    mint: primaryTokenDelta.mint,
+    signature,
+    slot,
+    traderWallet,
+    side,
+    amountIn: side === "buy" ? solAmount.toString() : tokenAmount.toString(),
+    amountOut: side === "buy" ? tokenAmount.toString() : solAmount.toString(),
+    price: (solAmount / tokenAmount).toString(),
+    pool,
+    occurredAt
+  };
+}
+
+function buildRoutedSwapFromLogsAndBalances(
+  meta: EncodedJsonTransaction["meta"],
+  accountKeys: string[],
+  signature: string,
+  slot: bigint,
+  occurredAt: Date
+): IndexedEvent | null {
+  const logs = meta?.logMessages ?? [];
+  if (!logs.length) {
+    return null;
+  }
+  const normalizedLogs = logs.map((line) => line.toLowerCase());
+  const hasAxiomInvoke = normalizedLogs.some((line) => line.includes(PROGRAM_IDS.axiomTrade.toLowerCase()));
+  const hasDbcInvoke = normalizedLogs.some((line) => line.includes(PROGRAM_IDS.dynamicBondingCurve.toLowerCase()));
+  const hasDammInvoke = normalizedLogs.some((line) => line.includes(PROGRAM_IDS.dammV2.toLowerCase()));
+  const hasSwapInstructionLog = normalizedLogs.some((line) => line.includes("instruction: swap"));
+  if (!hasAxiomInvoke || (!hasDbcInvoke && !hasDammInvoke) || !hasSwapInstructionLog) {
+    return null;
+  }
+
+  const tokenDeltas = getTokenBalanceDeltas(meta).filter(
+    (entry) => entry.mint !== PROGRAM_IDS.wsol && entry.delta !== 0 && isCandidateTokenMint(entry.mint)
+  );
+  if (tokenDeltas.length === 0) {
+    return null;
+  }
+  const primaryTokenDelta = tokenDeltas.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))[0];
+  if (!primaryTokenDelta) {
+    return null;
+  }
+
+  const traderWallet = resolveTraderWallet(primaryTokenDelta.owner ?? "", accountKeys, meta);
+  if (!traderWallet) {
+    return null;
+  }
+
+  let side: "buy" | "sell" = primaryTokenDelta.delta > 0 ? "buy" : "sell";
+  let tokenAmount = Math.abs(primaryTokenDelta.delta);
+  let solAmount = 0;
+
+  const ownerWsolDelta = getTokenBalanceDeltas(meta).find(
+    (entry) => entry.owner === traderWallet && entry.mint === PROGRAM_IDS.wsol && entry.delta !== 0
+  );
+  if (ownerWsolDelta) {
+    solAmount = Math.abs(ownerWsolDelta.delta);
+    side = ownerWsolDelta.delta < 0 ? "buy" : "sell";
+  } else {
+    const traderIndex = accountKeys.findIndex((key) => key === traderWallet);
+    if (traderIndex !== -1) {
+      const nativeDelta = getNativeBalanceDelta(meta, traderIndex);
+      if (nativeDelta !== 0) {
+        solAmount = Math.abs(nativeDelta);
+        side = nativeDelta < 0 ? "buy" : "sell";
+      }
+    }
+  }
+
+  if (solAmount <= 0 || tokenAmount <= 0) {
+    return null;
+  }
+
+  const pool: "bonding_curve" | "damm" = hasDbcInvoke ? "bonding_curve" : "damm";
   return {
     kind: "swap",
     mint: primaryTokenDelta.mint,
