@@ -11,6 +11,9 @@ export type BagsClaimablePosition = UnknownRecord & {
 };
 
 export type BagsClaimTransactionsResponse = UnknownRecord;
+export type BagsClaimTransactionEnvelope = {
+  serializedTransaction: string;
+};
 
 function buildUrl(path: string, query?: Record<string, string>) {
   const url = new URL(path, env.BAGS_API_BASE_URL);
@@ -132,4 +135,48 @@ export function extractTransactionCount(response: unknown): number {
     }
   }
   return 0;
+}
+
+export function extractSerializedClaimTransactions(response: unknown): BagsClaimTransactionEnvelope[] {
+  if (Array.isArray(response)) {
+    return response
+      .map(extractSerializedTransaction)
+      .filter((serializedTransaction): serializedTransaction is string => Boolean(serializedTransaction))
+      .map((serializedTransaction) => ({ serializedTransaction }));
+  }
+  if (!response || typeof response !== "object") {
+    return [];
+  }
+  const maybeArrays = [
+    (response as { transactions?: unknown[] }).transactions,
+    (response as { txs?: unknown[] }).txs,
+    (response as { claimTransactions?: unknown[] }).claimTransactions,
+    (response as { data?: unknown[] }).data
+  ];
+  for (const candidate of maybeArrays) {
+    if (Array.isArray(candidate)) {
+      return candidate
+        .map(extractSerializedTransaction)
+        .filter((serializedTransaction): serializedTransaction is string => Boolean(serializedTransaction))
+        .map((serializedTransaction) => ({ serializedTransaction }));
+    }
+  }
+  return [];
+}
+
+function extractSerializedTransaction(value: unknown): string | null {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value.trim();
+  }
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
+  const maybeSerialized =
+    candidate.serializedTransaction ??
+    candidate.serialized_transaction ??
+    candidate.transaction ??
+    candidate.tx ??
+    candidate.base64;
+  return typeof maybeSerialized === "string" && maybeSerialized.trim().length > 0 ? maybeSerialized.trim() : null;
 }

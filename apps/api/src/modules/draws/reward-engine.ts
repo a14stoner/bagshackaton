@@ -3,9 +3,11 @@ import { Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, Conne
 import { selectWeightedWinner } from "@bags/shared";
 import bs58 from "bs58";
 import { env } from "../../config/env";
+import { refreshHolderStatsForToken } from "../holders/refresh";
 import {
   createDraw,
   createPayout,
+  getTokenRuntimeByMint,
   getNextDrawNumber,
   incrementHolderWin,
   listHoldersByMint,
@@ -19,6 +21,9 @@ export function getRewardPercent(random: number): number {
 }
 
 export async function runRewardDraw(tokenMint: string, treasuryBalance: number, random = Math.random()) {
+  await refreshHolderStatsForToken(tokenMint, new Date());
+  const tokenRuntime = await getTokenRuntimeByMint(tokenMint);
+  const effectiveTreasuryBalance = Number(tokenRuntime?.treasury_balance ?? treasuryBalance ?? 0);
   const drawNumber = await getNextDrawNumber(tokenMint);
   const holders = await listHoldersByMint(tokenMint);
 
@@ -43,7 +48,7 @@ export async function runRewardDraw(tokenMint: string, treasuryBalance: number, 
   });
 
   const rewardPercent = getRewardPercent(random);
-  const rewardAmount = Number(((treasuryBalance * rewardPercent) / 100).toFixed(9));
+  const rewardAmount = winner ? Number(((effectiveTreasuryBalance * rewardPercent) / 100).toFixed(9)) : 0;
   const drawId = randomUUID();
   const createdAt = new Date();
   let payoutTxSignature: string | null = null;
@@ -90,6 +95,7 @@ export async function runRewardDraw(tokenMint: string, treasuryBalance: number, 
     drawNumber,
     rewardAmount,
     rewardPercent,
+    treasuryBalance: effectiveTreasuryBalance,
     winnerWallet: winner?.wallet ?? null,
     txSignature: payoutTxSignature
   };

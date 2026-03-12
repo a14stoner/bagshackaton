@@ -44,6 +44,7 @@ export const tokens = pgTable("tokens", {
   totalSupply: numeric("total_supply", { precision: 32, scale: 0 }).notNull(),
   treasuryBalance: numeric("treasury_balance", { precision: 32, scale: 9 }).notNull().default("0"),
   totalFeesGenerated: numeric("total_fees_generated", { precision: 32, scale: 9 }).notNull().default("0"),
+  totalFeesClaimed: numeric("total_fees_claimed", { precision: 32, scale: 9 }).notNull().default("0"),
   totalFeesDistributed: numeric("total_fees_distributed", { precision: 32, scale: 9 }).notNull().default("0"),
   latestWinnerWallet: text("latest_winner_wallet"),
   nextDrawAt: timestamp("next_draw_at", { withTimezone: true })
@@ -182,7 +183,10 @@ export const tokenClaimRuns = pgTable("token_claim_runs", {
   receiverWallet: text("receiver_wallet").notNull(),
   claimableLamports: numeric("claimable_lamports", { precision: 32, scale: 0 }).notNull(),
   claimableSol: numeric("claimable_sol", { precision: 32, scale: 9 }).notNull(),
+  claimedLamports: numeric("claimed_lamports", { precision: 32, scale: 0 }).notNull().default("0"),
+  claimedSol: numeric("claimed_sol", { precision: 32, scale: 9 }).notNull().default("0"),
   txCount: integer("tx_count").notNull().default(0),
+  txSignatures: jsonb("tx_signatures").notNull().default([]),
   success: boolean("success").notNull().default(true),
   error: text("error"),
   responsePayload: jsonb("response_payload").notNull(),

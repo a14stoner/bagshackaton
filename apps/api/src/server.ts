@@ -5,6 +5,7 @@ import { BagsIndexer } from "./indexer/bags-indexer";
 import { scheduleRecurringDraws } from "./workers/draw-scheduler";
 import { startDrawWorker } from "./workers/draw-worker";
 import { FeeClaimSyncWorker } from "./workers/fee-claim-sync";
+import { HolderStatsRefreshWorker } from "./workers/holder-stats-refresh";
 import { TokenMetadataSyncWorker } from "./workers/token-metadata-sync";
 
 async function main() {
@@ -14,9 +15,11 @@ async function main() {
 
   const indexer = new BagsIndexer();
   const feeClaimSyncWorker = new FeeClaimSyncWorker();
+  const holderStatsRefreshWorker = new HolderStatsRefreshWorker();
   const tokenMetadataSyncWorker = new TokenMetadataSyncWorker();
   await indexer.start();
   feeClaimSyncWorker.start();
+  holderStatsRefreshWorker.start();
   tokenMetadataSyncWorker.start();
 
   const app = await buildApp(indexer);

@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS tokens (
   total_supply NUMERIC(32, 0) NOT NULL,
   treasury_balance NUMERIC(32, 9) NOT NULL DEFAULT 0,
   total_fees_generated NUMERIC(32, 9) NOT NULL DEFAULT 0,
+  total_fees_claimed NUMERIC(32, 9) NOT NULL DEFAULT 0,
   total_fees_distributed NUMERIC(32, 9) NOT NULL DEFAULT 0,
   latest_winner_wallet TEXT,
   next_draw_at TIMESTAMPTZ
@@ -32,6 +33,7 @@ CREATE TABLE IF NOT EXISTS tokens (
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS metadata_uri TEXT;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS image_uri TEXT;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS metadata_synced_at TIMESTAMPTZ;
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS total_fees_claimed NUMERIC(32, 9) NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS fee_receivers (
   token_mint TEXT NOT NULL REFERENCES tokens(mint) ON DELETE CASCADE,
@@ -151,12 +153,19 @@ CREATE TABLE IF NOT EXISTS token_claim_runs (
   receiver_wallet TEXT NOT NULL,
   claimable_lamports NUMERIC(32, 0) NOT NULL,
   claimable_sol NUMERIC(32, 9) NOT NULL,
+  claimed_lamports NUMERIC(32, 0) NOT NULL DEFAULT 0,
+  claimed_sol NUMERIC(32, 9) NOT NULL DEFAULT 0,
   tx_count INTEGER NOT NULL DEFAULT 0,
+  tx_signatures JSONB NOT NULL DEFAULT '[]'::jsonb,
   success BOOLEAN NOT NULL DEFAULT TRUE,
   error TEXT,
   response_payload JSONB NOT NULL,
   requested_at TIMESTAMPTZ NOT NULL
 );
+
+ALTER TABLE token_claim_runs ADD COLUMN IF NOT EXISTS claimed_lamports NUMERIC(32, 0) NOT NULL DEFAULT 0;
+ALTER TABLE token_claim_runs ADD COLUMN IF NOT EXISTS claimed_sol NUMERIC(32, 9) NOT NULL DEFAULT 0;
+ALTER TABLE token_claim_runs ADD COLUMN IF NOT EXISTS tx_signatures JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE TABLE IF NOT EXISTS indexer_checkpoint (
   id TEXT PRIMARY KEY,

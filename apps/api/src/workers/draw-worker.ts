@@ -1,8 +1,10 @@
 import { Worker } from "bullmq";
+import { env } from "../config/env";
 import { listTrackedTokensForDraws } from "../services/repositories";
 import { logger } from "../services/logger";
 import { runRewardDraw } from "../modules/draws/reward-engine";
 import { createBullConnection } from "./draw-scheduler";
+import { updateTokenTreasury } from "../services/repositories";
 
 export function startDrawWorker() {
   const worker = new Worker(
@@ -13,7 +15,12 @@ export function startDrawWorker() {
       }
 
       const trackedTokens = await listTrackedTokensForDraws();
+      const nextDrawAt = new Date(Date.now() + env.DRAW_INTERVAL_MINUTES * 60_000);
       for (const token of trackedTokens) {
+        await updateTokenTreasury({
+          tokenMint: token.mint,
+          nextDrawAt
+        });
         const treasuryBalance = Number(token.treasury_balance ?? 0);
         if (!Number.isFinite(treasuryBalance) || treasuryBalance <= 0) {
           continue;

@@ -4,6 +4,7 @@ import { env } from "../config/env";
 import { applyLedgerEvent, type HolderState } from "../modules/holders/accounting";
 import {
   hasTargetFeeReceiver,
+  getTokenRuntimeByMint,
   insertNormalizedEvent,
   insertSwap,
   insertTransfer,
@@ -13,7 +14,7 @@ import {
   upsertCheckpoint,
   upsertToken
 } from "../services/repositories";
-import { fetchOffchainMetadata, fetchOnchainTokenMetadataWithTimeout } from "../services/token-metadata";
+import { fetchOffchainMetadata, fetchOnchainTokenMetadataWithTimeout, fetchTokenSupply } from "../services/token-metadata";
 import { logger } from "../services/logger";
 import { resolveFeeReceiver, type ResolvedFeeReceiver } from "./fee-receiver-resolver";
 import type { IndexedEvent } from "./types";
@@ -28,6 +29,7 @@ const receiverResolutionCache = new Map<string, ResolvedFeeReceiver>();
 
 export class IndexerEventProcessor {
   private holders: HolderCache = new Map();
+  private tokenSupplyCache = new Map<string, number>();
 
   constructor(private readonly targetFeeReceiverWallet: string) {}
 
@@ -146,12 +148,13 @@ export class IndexerEventProcessor {
         occurredAt: event.occurredAt
       });
 
+      const totalSupply = await this.getTokenSupply(event.mint, event.slot, event.occurredAt);
       const cacheKey = `${event.mint}:${event.traderWallet}`;
       const amount = event.side === "buy" ? Number(event.amountOut) : Number(event.amountIn);
       const next = applyLedgerEvent(
         this.holders.get(cacheKey),
         { type: event.side, wallet: event.traderWallet, amount, occurredAt: event.occurredAt },
-        1_000_000_000
+        totalSupply
       );
       this.holders.set(cacheKey, next);
       await persistHolder(event.mint, next);
@@ -187,17 +190,18 @@ export class IndexerEventProcessor {
         occurredAt: event.occurredAt
       });
 
+      const totalSupply = await this.getTokenSupply(event.mint, event.slot, event.occurredAt);
       const sourceKey = `${event.mint}:${event.fromWallet}`;
       const destKey = `${event.mint}:${event.toWallet}`;
       const source = applyLedgerEvent(
         this.holders.get(sourceKey),
         { type: "transfer_out", wallet: event.fromWallet, amount: Number(event.amount), occurredAt: event.occurredAt },
-        1_000_000_000
+        totalSupply
       );
       const dest = applyLedgerEvent(
         this.holders.get(destKey),
         { type: "transfer_in", wallet: event.toWallet, amount: Number(event.amount), occurredAt: event.occurredAt },
-        1_000_000_000
+        totalSupply
       );
       this.holders.set(sourceKey, source);
       this.holders.set(destKey, dest);
@@ -234,6 +238,19 @@ export class IndexerEventProcessor {
     }
 
     await upsertCheckpoint("bags-meteora-indexer", event.slot, "signature" in event ? event.signature : null);
+  }
+
+  private async getTokenSupply(mint: string, slot: bigint, occurredAt: Date): Promise<number> {
+    const cached = this.tokenSupplyCache.get(mint);
+    if (cached && cached > 0) {
+      return cached;
+    }
+    await ensureTokenExists(mint, slot, occurredAt);
+    const tokenRuntime = await getTokenRuntimeByMint(mint);
+    const parsed = Number(tokenRuntime?.total_supply ?? 0);
+    const totalSupply = Number.isFinite(parsed) && parsed > 0 ? parsed : 1_000_000_000;
+    this.tokenSupplyCache.set(mint, totalSupply);
+    return totalSupply;
   }
 }
 
@@ -288,12 +305,14 @@ async function syncTokenMetadataNow(mint: string): Promise<void> {
     }
 
     const offchain = onchain.uri ? await fetchOffchainMetadata(onchain.uri) : { image: null };
+    const totalSupply = await fetchTokenSupply(metadataConnection, mint);
     await updateTokenMetadata({
       mint,
       name: onchain.name || null,
       symbol: onchain.symbol || null,
       metadataUri: onchain.uri || null,
       imageUri: offchain.image,
+      totalSupply,
       metadataSyncedAt: new Date()
     });
 

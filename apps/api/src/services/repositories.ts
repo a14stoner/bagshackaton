@@ -22,12 +22,13 @@ export async function upsertToken(input: CreateTokenInput): Promise<void> {
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
      ON CONFLICT (mint) DO UPDATE
      SET symbol = COALESCE(NULLIF(EXCLUDED.symbol, 'UNKNOWN'), tokens.symbol),
-         name = COALESCE(NULLIF(EXCLUDED.name, 'Migrated Token'), tokens.name),
-         metadata_uri = COALESCE(EXCLUDED.metadata_uri, tokens.metadata_uri),
-         image_uri = COALESCE(EXCLUDED.image_uri, tokens.image_uri),
-         metadata_synced_at = COALESCE(EXCLUDED.metadata_synced_at, tokens.metadata_synced_at),
-         fee_config_account = COALESCE(EXCLUDED.fee_config_account, tokens.fee_config_account),
-         status = CASE
+          name = COALESCE(NULLIF(EXCLUDED.name, 'Migrated Token'), tokens.name),
+          metadata_uri = COALESCE(EXCLUDED.metadata_uri, tokens.metadata_uri),
+          image_uri = COALESCE(EXCLUDED.image_uri, tokens.image_uri),
+          metadata_synced_at = COALESCE(EXCLUDED.metadata_synced_at, tokens.metadata_synced_at),
+          fee_config_account = COALESCE(EXCLUDED.fee_config_account, tokens.fee_config_account),
+          total_supply = COALESCE(EXCLUDED.total_supply, tokens.total_supply),
+          status = CASE
            WHEN tokens.status = 'MIGRATED' THEN 'MIGRATED'
            WHEN EXCLUDED.status = 'MIGRATED' THEN 'MIGRATED'
            WHEN tokens.status = 'TRACKED' AND EXCLUDED.status = 'DISCOVERED' THEN 'TRACKED'
@@ -253,6 +254,7 @@ export async function listTokens(trackedOnly = true) {
             END AS lifecycle_phase,
             t.treasury_balance,
             t.total_fees_generated,
+            t.total_fees_claimed,
             t.total_fees_distributed,
             t.latest_winner_wallet,
             t.next_draw_at,
@@ -261,6 +263,7 @@ export async function listTokens(trackedOnly = true) {
             COALESCE(tcs.positions_count, 0) AS claimable_positions_count,
             tcs.last_synced_at AS claimable_last_synced_at,
             tcr.claimable_sol AS last_claim_request_sol,
+            tcr.claimed_sol AS last_claimed_sol,
             tcr.tx_count AS last_claim_request_tx_count,
             tcr.requested_at AS last_claim_request_at
      FROM tokens t
@@ -278,8 +281,8 @@ export async function listTokens(trackedOnly = true) {
        LIMIT 1
      ) ls ON TRUE
      LEFT JOIN LATERAL (
-       SELECT claimable_sol, tx_count, requested_at
-       FROM token_claim_runs
+        SELECT claimable_sol, claimed_sol, tx_count, requested_at
+        FROM token_claim_runs
        WHERE token_mint = t.mint AND success = TRUE
        ORDER BY requested_at DESC
        LIMIT 1
@@ -311,6 +314,7 @@ export async function getTokenByMint(mint: string) {
             t.total_supply,
             t.treasury_balance,
             t.total_fees_generated,
+            t.total_fees_claimed,
             t.total_fees_distributed,
             t.latest_winner_wallet,
             t.next_draw_at,
@@ -319,6 +323,7 @@ export async function getTokenByMint(mint: string) {
             COALESCE(tcs.positions_count, 0) AS claimable_positions_count,
             tcs.last_synced_at AS claimable_last_synced_at,
             tcr.claimable_sol AS last_claim_request_sol,
+            tcr.claimed_sol AS last_claimed_sol,
             tcr.tx_count AS last_claim_request_tx_count,
             tcr.requested_at AS last_claim_request_at
      FROM tokens t
@@ -336,8 +341,8 @@ export async function getTokenByMint(mint: string) {
        LIMIT 1
      ) ls ON TRUE
      LEFT JOIN LATERAL (
-       SELECT claimable_sol, tx_count, requested_at
-       FROM token_claim_runs
+        SELECT claimable_sol, claimed_sol, tx_count, requested_at
+        FROM token_claim_runs
        WHERE token_mint = t.mint AND success = TRUE
        ORDER BY requested_at DESC
        LIMIT 1
@@ -370,6 +375,7 @@ export async function updateTokenMetadata(input: {
   symbol: string | null;
   metadataUri: string | null;
   imageUri: string | null;
+  totalSupply?: string | null;
   metadataSyncedAt: Date;
 }) {
   await pgPool.query(
@@ -378,9 +384,10 @@ export async function updateTokenMetadata(input: {
          symbol = COALESCE(NULLIF($3, ''), symbol),
          metadata_uri = COALESCE($4, metadata_uri),
          image_uri = COALESCE($5, image_uri),
-         metadata_synced_at = $6
+         total_supply = COALESCE($6, total_supply),
+         metadata_synced_at = $7
      WHERE mint = $1`,
-    [input.mint, input.name, input.symbol, input.metadataUri, input.imageUri, input.metadataSyncedAt]
+    [input.mint, input.name, input.symbol, input.metadataUri, input.imageUri, input.totalSupply ?? null, input.metadataSyncedAt]
   );
 }
 
@@ -398,14 +405,14 @@ export async function listTrackedTokenMints() {
 
 export async function listTrackedTokensForDraws() {
   const result = await pgPool.query(
-    `SELECT DISTINCT t.mint, t.symbol, t.treasury_balance
+    `SELECT DISTINCT t.mint, t.symbol, t.treasury_balance, t.total_supply, t.next_draw_at
      FROM tokens t
      INNER JOIN fee_receivers fr
        ON fr.token_mint = t.mint
       AND fr.is_target = TRUE
      ORDER BY t.mint ASC`
   );
-  return result.rows as Array<{ mint: string; symbol: string; treasury_balance: string }>;
+  return result.rows as Array<{ mint: string; symbol: string; treasury_balance: string; total_supply: string; next_draw_at: Date | null }>;
 }
 
 export async function upsertTokenClaimableState(input: {
@@ -459,25 +466,32 @@ export async function createTokenClaimRun(input: {
   receiverWallet: string;
   claimableLamports: string;
   claimableSol: string;
+  claimedLamports: string;
+  claimedSol: string;
   txCount: number;
+  txSignatures: string[];
   success: boolean;
   error: string | null;
   responsePayload: unknown;
   requestedAt: Date;
 }): Promise<void> {
   const responsePayload = normalizeJsonValue(input.responsePayload);
+  const txSignatures = normalizeJsonValue(input.txSignatures);
   await pgPool.query(
     `INSERT INTO token_claim_runs (
-      id, token_mint, receiver_wallet, claimable_lamports, claimable_sol, tx_count, success, error, response_payload, requested_at
+      id, token_mint, receiver_wallet, claimable_lamports, claimable_sol, claimed_lamports, claimed_sol, tx_count, tx_signatures, success, error, response_payload, requested_at
     )
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
     [
       input.id,
       input.tokenMint,
       input.receiverWallet,
       input.claimableLamports,
       input.claimableSol,
+      input.claimedLamports,
+      input.claimedSol,
       input.txCount,
+      txSignatures,
       input.success,
       input.error,
       responsePayload,
@@ -576,6 +590,7 @@ export async function healthcheck() {
 export async function updateTokenTreasury(input: {
   tokenMint: string;
   generatedFeesDelta?: string | null;
+  claimedFeesDelta?: string | null;
   distributedFeesDelta?: string | null;
   treasuryBalance?: string | null;
   treasuryBalanceDelta?: string | null;
@@ -585,14 +600,16 @@ export async function updateTokenTreasury(input: {
   await pgPool.query(
     `UPDATE tokens
      SET total_fees_generated = total_fees_generated + COALESCE($2, 0),
-         total_fees_distributed = total_fees_distributed + COALESCE($3, 0),
-         treasury_balance = COALESCE($4, treasury_balance + COALESCE($5, 0)),
-         latest_winner_wallet = COALESCE($6, latest_winner_wallet),
-         next_draw_at = COALESCE($7, next_draw_at)
+         total_fees_claimed = total_fees_claimed + COALESCE($3, 0),
+         total_fees_distributed = total_fees_distributed + COALESCE($4, 0),
+         treasury_balance = COALESCE($5, treasury_balance + COALESCE($6, 0)),
+         latest_winner_wallet = COALESCE($7, latest_winner_wallet),
+         next_draw_at = COALESCE($8, next_draw_at)
      WHERE mint = $1`,
     [
       input.tokenMint,
       input.generatedFeesDelta ?? null,
+      input.claimedFeesDelta ?? null,
       input.distributedFeesDelta ?? null,
       input.treasuryBalance ?? null,
       input.treasuryBalanceDelta ?? null,
@@ -600,6 +617,17 @@ export async function updateTokenTreasury(input: {
       input.nextDrawAt ?? null
     ]
   );
+}
+
+export async function getTokenRuntimeByMint(tokenMint: string) {
+  const result = await pgPool.query(
+    `SELECT mint, total_supply, treasury_balance, next_draw_at
+     FROM tokens
+     WHERE mint = $1
+     LIMIT 1`,
+    [tokenMint]
+  );
+  return result.rows[0] ?? null;
 }
 
 export async function saveHolderSnapshot(input: {

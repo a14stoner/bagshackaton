@@ -12,6 +12,15 @@ type OffchainMetadata = {
   image: string | null;
 };
 
+export async function fetchTokenSupply(connection: Connection, mint: string): Promise<string | null> {
+  try {
+    const supply = await connection.getTokenSupply(new PublicKey(mint), "confirmed");
+    return supply.value.amount ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function deriveMetadataPda(mint: string): PublicKey {
   const mintKey = new PublicKey(mint);
   const [pda] = PublicKey.findProgramAddressSync(

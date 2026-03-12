@@ -84,3 +84,26 @@ export function applyLedgerEvent(
 
   return base;
 }
+
+export function refreshHolderState(
+  current: HolderState,
+  totalSupply: number,
+  now: Date = new Date()
+): HolderState {
+  const next: HolderState = {
+    ...current
+  };
+
+  next.holdDurationHours = next.firstBuyTime
+    ? Math.max(0, (now.getTime() - next.firstBuyTime.getTime()) / 3_600_000)
+    : 0;
+  next.percentSupply = totalSupply > 0 ? next.currentBalance / totalSupply : 0;
+  next.sellRatio = normalizeSellRatio(next.totalAcquired, next.totalSold);
+  next.holdScore = calculateHoldScore({
+    holdHours: next.holdDurationHours,
+    percentSupply: next.percentSupply,
+    sellRatio: next.sellRatio
+  });
+
+  return next;
+}

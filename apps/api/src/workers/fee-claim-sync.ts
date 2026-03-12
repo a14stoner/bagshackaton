@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { Connection, Keypair, Transaction, VersionedTransaction, sendAndConfirmRawTransaction } from "@solana/web3.js";
+import bs58 from "bs58";
 import { env } from "../config/env";
 import { logger } from "../services/logger";
 import {
@@ -10,6 +12,7 @@ import {
 } from "../services/repositories";
 import {
   extractClaimableLamports,
+  extractSerializedClaimTransactions,
   extractTransactionCount,
   getClaimTransactionsV3,
   getClaimablePositions,
@@ -20,6 +23,8 @@ import {
 export class FeeClaimSyncWorker {
   private timer: NodeJS.Timeout | null = null;
   private inFlight = false;
+  private readonly connection = new Connection(env.RPC_URL, "confirmed");
+  private readonly claimer = resolveClaimerKeypair();
 
   start() {
     if (!env.BAGS_API_KEY) {
@@ -30,7 +35,8 @@ export class FeeClaimSyncWorker {
     logger.info(
       {
         intervalSeconds: env.CLAIM_SYNC_INTERVAL_SECONDS,
-        requestClaimTransactions: env.CLAIM_REQUEST_TRANSACTIONS
+        requestClaimTransactions: env.CLAIM_REQUEST_TRANSACTIONS,
+        executeClaimTransactions: env.CLAIM_EXECUTE_TRANSACTIONS && Boolean(this.claimer)
       },
       "Fee claim sync worker started"
     );
@@ -61,9 +67,21 @@ export class FeeClaimSyncWorker {
         logger.debug("Fee claim sync found no tracked tokens");
         return;
       }
+      const receiverWallet = env.TARGET_FEE_RECEIVER_WALLET;
+      const claimablePositions = await getClaimablePositions(receiverWallet);
+      const positionsByMint = new Map<string, typeof claimablePositions>();
+      for (const position of claimablePositions) {
+        const tokenMint = resolveTokenMint(position);
+        if (!tokenMint) {
+          continue;
+        }
+        const existing = positionsByMint.get(tokenMint) ?? [];
+        existing.push(position);
+        positionsByMint.set(tokenMint, existing);
+      }
 
       for (const token of trackedTokens) {
-        await this.syncToken(token.mint);
+        await this.syncToken(token.mint, positionsByMint.get(token.mint) ?? []);
       }
     } catch (error) {
       logger.error({ err: error }, "Fee claim sync iteration failed");
@@ -72,12 +90,10 @@ export class FeeClaimSyncWorker {
     }
   }
 
-  private async syncToken(tokenMint: string) {
+  private async syncToken(tokenMint: string, tokenPositions: Awaited<ReturnType<typeof getClaimablePositions>>) {
     const receiverWallet = env.TARGET_FEE_RECEIVER_WALLET;
     const now = new Date();
 
-    const claimablePositions = await getClaimablePositions(receiverWallet);
-    const tokenPositions = claimablePositions.filter((position) => resolveTokenMint(position) === tokenMint);
     const claimableLamports = tokenPositions.reduce((sum, position) => sum + extractClaimableLamports(position), 0n);
     const claimableSol = lamportsToSolString(claimableLamports);
     const previousState = await getTokenClaimableState(tokenMint);
@@ -100,8 +116,7 @@ export class FeeClaimSyncWorker {
       const generatedDeltaSol = lamportsToSolString(generatedDeltaLamports);
       await updateTokenTreasury({
         tokenMint,
-        generatedFeesDelta: generatedDeltaSol,
-        treasuryBalanceDelta: generatedDeltaSol
+        generatedFeesDelta: generatedDeltaSol
       });
     }
 
@@ -121,12 +136,45 @@ export class FeeClaimSyncWorker {
       return;
     }
 
+    let txCount = 0;
+    let txSignatures: string[] = [];
+    let claimedLamports = 0n;
+    let claimTransactions: unknown = {};
     try {
-      const claimTransactions = await getClaimTransactionsV3({
+      claimTransactions = await getClaimTransactionsV3({
         receiverWallet,
         tokenMint
       });
-      const txCount = extractTransactionCount(claimTransactions);
+      txCount = extractTransactionCount(claimTransactions);
+      if (env.CLAIM_EXECUTE_TRANSACTIONS && this.claimer && txCount > 0) {
+        txSignatures = await executeClaimTransactions(this.connection, this.claimer, claimTransactions);
+        const refreshedPositions = await getClaimablePositions(receiverWallet);
+        const refreshedTokenPositions = refreshedPositions.filter((position) => resolveTokenMint(position) === tokenMint);
+        const remainingLamports = refreshedTokenPositions.reduce(
+          (sum, position) => sum + extractClaimableLamports(position),
+          0n
+        );
+        claimedLamports = claimableLamports > remainingLamports ? claimableLamports - remainingLamports : 0n;
+        await upsertTokenClaimableState({
+          tokenMint,
+          receiverWallet,
+          claimableLamports: remainingLamports.toString(),
+          claimableSol: lamportsToSolString(remainingLamports),
+          positionsCount: refreshedTokenPositions.length,
+          payload: {
+            positions: refreshedTokenPositions
+          },
+          lastSyncedAt: new Date()
+        });
+        if (claimedLamports > 0n) {
+          const claimedSol = lamportsToSolString(claimedLamports);
+          await updateTokenTreasury({
+            tokenMint,
+            claimedFeesDelta: claimedSol,
+            treasuryBalanceDelta: claimedSol
+          });
+        }
+      }
 
       await createTokenClaimRun({
         id: randomUUID(),
@@ -134,7 +182,10 @@ export class FeeClaimSyncWorker {
         receiverWallet,
         claimableLamports: claimableLamports.toString(),
         claimableSol,
+        claimedLamports: claimedLamports.toString(),
+        claimedSol: lamportsToSolString(claimedLamports),
         txCount,
+        txSignatures,
         success: true,
         error: null,
         responsePayload: claimTransactions,
@@ -145,9 +196,13 @@ export class FeeClaimSyncWorker {
         {
           tokenMint,
           claimableSol,
-          txCount
+          txCount,
+          claimedSol: lamportsToSolString(claimedLamports),
+          txSignatures
         },
-        "Requested claim transactions"
+        env.CLAIM_EXECUTE_TRANSACTIONS && txSignatures.length > 0
+          ? "Executed claim transactions"
+          : "Requested claim transactions"
       );
     } catch (error) {
       await createTokenClaimRun({
@@ -156,13 +211,67 @@ export class FeeClaimSyncWorker {
         receiverWallet,
         claimableLamports: claimableLamports.toString(),
         claimableSol,
+        claimedLamports: claimedLamports.toString(),
+        claimedSol: lamportsToSolString(claimedLamports),
         txCount: 0,
+        txSignatures,
         success: false,
         error: error instanceof Error ? error.message : String(error),
-        responsePayload: {},
+        responsePayload: claimTransactions,
         requestedAt: now
       });
       throw error;
     }
   }
+}
+
+async function executeClaimTransactions(
+  connection: Connection,
+  claimer: Keypair,
+  response: unknown
+): Promise<string[]> {
+  const transactions = extractSerializedClaimTransactions(response);
+  const signatures: string[] = [];
+  for (const envelope of transactions) {
+    const rawBytes = Buffer.from(envelope.serializedTransaction, "base64");
+    try {
+      const versioned = VersionedTransaction.deserialize(rawBytes);
+      versioned.sign([claimer]);
+      const signature = await sendAndConfirmRawTransaction(connection, Buffer.from(versioned.serialize()), {
+        commitment: "confirmed"
+      });
+      signatures.push(signature);
+      continue;
+    } catch {
+      const legacy = Transaction.from(rawBytes);
+      legacy.partialSign(claimer);
+      const signature = await sendAndConfirmRawTransaction(connection, legacy.serialize(), {
+        commitment: "confirmed"
+      });
+      signatures.push(signature);
+    }
+  }
+  return signatures;
+}
+
+function resolveClaimerKeypair(): Keypair | null {
+  const secret = env.CLAIMER_SECRET_KEY || env.REWARD_PAYER_SECRET_KEY;
+  if (!secret) {
+    return null;
+  }
+  const trimmed = secret.trim();
+  const keypair = trimmed.startsWith("[")
+    ? Keypair.fromSecretKey(Uint8Array.from(JSON.parse(trimmed) as number[]))
+    : Keypair.fromSecretKey(bs58.decode(trimmed));
+  if (keypair.publicKey.toBase58() !== env.TARGET_FEE_RECEIVER_WALLET) {
+    logger.warn(
+      {
+        targetFeeReceiverWallet: env.TARGET_FEE_RECEIVER_WALLET,
+        claimerWallet: keypair.publicKey.toBase58()
+      },
+      "Claim execution disabled because claimer wallet does not match TARGET_FEE_RECEIVER_WALLET"
+    );
+    return null;
+  }
+  return keypair;
 }

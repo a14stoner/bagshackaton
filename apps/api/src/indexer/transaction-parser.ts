@@ -513,7 +513,7 @@ function buildTransferEvents(
   const byMint = new Map<string, typeof deltas>();
 
   for (const delta of deltas) {
-    if (!isCandidateTokenMint(delta.mint) || !delta.owner || !isLikelyWallet(delta.owner)) {
+    if (!isCandidateTokenMint(delta.mint) || !delta.owner || !isLikelyTransferWallet(delta.owner)) {
       continue;
     }
     const existing = byMint.get(delta.mint) ?? [];
@@ -1079,6 +1079,10 @@ function dedupeEvents(events: IndexedEvent[]): IndexedEvent[] {
 }
 
 function isLikelyWallet(value: string): boolean {
+  return Boolean(value) && !isKnownProgramLike(value);
+}
+
+function isLikelyTransferWallet(value: string): boolean {
   if (!value || isKnownProgramLike(value)) {
     return false;
   }
