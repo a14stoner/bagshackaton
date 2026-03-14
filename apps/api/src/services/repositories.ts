@@ -599,10 +599,10 @@ export async function updateTokenTreasury(input: {
 }): Promise<void> {
   await pgPool.query(
     `UPDATE tokens
-     SET total_fees_generated = total_fees_generated + COALESCE($2, 0),
-         total_fees_claimed = total_fees_claimed + COALESCE($3, 0),
-         total_fees_distributed = total_fees_distributed + COALESCE($4, 0),
-         treasury_balance = COALESCE($5, treasury_balance + COALESCE($6, 0)),
+     SET total_fees_generated = total_fees_generated + COALESCE($2::numeric, 0),
+         total_fees_claimed = total_fees_claimed + COALESCE($3::numeric, 0),
+         total_fees_distributed = total_fees_distributed + COALESCE($4::numeric, 0),
+         treasury_balance = COALESCE($5::numeric, treasury_balance + COALESCE($6::numeric, 0)),
          latest_winner_wallet = COALESCE($7, latest_winner_wallet),
          next_draw_at = COALESCE($8, next_draw_at)
      WHERE mint = $1`,
