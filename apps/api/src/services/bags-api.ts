@@ -15,8 +15,14 @@ export type BagsClaimTransactionEnvelope = {
   serializedTransaction: string;
 };
 
+function normalizeBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+  return trimmed.endsWith("/api/v1") ? trimmed : `${trimmed}/api/v1`;
+}
+
 function buildUrl(path: string, query?: Record<string, string>) {
-  const url = new URL(path, env.BAGS_API_BASE_URL);
+  const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
+  const url = new URL(normalizedPath, `${normalizeBaseUrl(env.BAGS_API_BASE_URL)}/`);
   for (const [key, value] of Object.entries(query ?? {})) {
     url.searchParams.set(key, value);
   }
@@ -29,27 +35,34 @@ async function request<T>(path: string, init?: RequestInit, query?: Record<strin
     headers: {
       "Content-Type": "application/json",
       "x-api-key": env.BAGS_API_KEY,
+      ...(env.BAGS_API_KEY ? { Authorization: `Bearer ${env.BAGS_API_KEY}` } : {}),
       ...(init?.headers ?? {})
     }
   });
 
   const text = await response.text();
-  const body = text ? (JSON.parse(text) as unknown) : null;
+  const contentType = response.headers.get("content-type") ?? "";
+  const body = parseResponseBody(text, contentType);
   if (!response.ok) {
-    throw new Error(`Bags API ${response.status} ${response.statusText}: ${text}`);
+    throw new Error(`Bags API ${response.status} ${response.statusText}: ${formatErrorBody(body, text)}`);
+  }
+  if (body === null) {
+    throw new Error(`Bags API returned empty response body for ${buildUrl(path, query)}`);
   }
   return body as T;
 }
 
 export async function getClaimablePositions(receiverWallet: string): Promise<BagsClaimablePosition[]> {
-  const response = await request<unknown>(
-    "/token-launch/claimable-positions",
-    {
-      method: "GET"
-    },
-    {
-      wallet: receiverWallet
-    }
+  const response = unwrapApiResponse(
+    await request<unknown>(
+      "/token-launch/claimable-positions",
+      {
+        method: "GET"
+      },
+      {
+        wallet: receiverWallet
+      }
+    )
   );
 
   if (Array.isArray(response)) {
@@ -65,13 +78,50 @@ export async function getClaimTransactionsV3(input: {
   receiverWallet: string;
   tokenMint: string;
 }): Promise<BagsClaimTransactionsResponse> {
-  return request<BagsClaimTransactionsResponse>(`/token-launch/claim-txs/v3`, {
-    method: "POST",
-    body: JSON.stringify({
-      feeClaimer: input.receiverWallet,
-      tokenMint: input.tokenMint
+  return unwrapApiResponse(
+    await request<BagsClaimTransactionsResponse>(`/token-launch/claim-txs/v3`, {
+      method: "POST",
+      body: JSON.stringify({
+        feeClaimer: input.receiverWallet,
+        tokenMint: input.tokenMint
+      })
     })
-  });
+  ) as BagsClaimTransactionsResponse;
+}
+
+function unwrapApiResponse(response: unknown): unknown {
+  if (!response || typeof response !== "object") {
+    return response;
+  }
+  if ("response" in response) {
+    return (response as { response?: unknown }).response;
+  }
+  return response;
+}
+
+function parseResponseBody(text: string, contentType: string): unknown {
+  if (!text) {
+    return null;
+  }
+  const trimmed = text.trim();
+  const looksJson = contentType.includes("application/json") || trimmed.startsWith("{") || trimmed.startsWith("[");
+  if (!looksJson) {
+    throw new Error(`Bags API returned non-JSON response: ${trimmed.slice(0, 200)}`);
+  }
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch (error) {
+    throw new Error(
+      `Failed to parse Bags API JSON response: ${error instanceof Error ? error.message : String(error)}; body=${trimmed.slice(0, 200)}`
+    );
+  }
+}
+
+function formatErrorBody(parsedBody: unknown, rawText: string): string {
+  if (parsedBody && typeof parsedBody === "object") {
+    return JSON.stringify(parsedBody);
+  }
+  return rawText.slice(0, 500);
 }
 
 export function resolveTokenMint(position: BagsClaimablePosition): string | null {
@@ -112,6 +162,8 @@ export function extractClaimableLamports(position: BagsClaimablePosition): bigin
     readLamports(position.totalClaimablePositionLamportsUserShare) ||
     readLamports(position.totalClaimablePositionLamports) ||
     readLamports(position.userClaimablePositionLamports) ||
+    readLamports(position.totalClaimableLamportsUserShare) ||
+    readLamports(position.virtualPoolClaimableLamportsUserShare) + readLamports(position.dammPoolClaimableLamportsUserShare) ||
     0n
   );
 }
