@@ -21,7 +21,7 @@ export function LeaderboardPageClient({ tokens }: { tokens: TokenOption[] }) {
           <select className="select" value={selectedMint} onChange={(event: any) => setSelectedMint(event.target.value)}>
             {tokens.map((token) => (
               <option key={token.mint} value={token.mint}>
-                {token.symbol} • {token.lifecycle_phase}
+                {token.symbol} - {token.lifecycle_phase}
               </option>
             ))}
           </select>

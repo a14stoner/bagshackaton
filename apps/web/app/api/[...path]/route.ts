@@ -7,6 +7,15 @@ function resolveBackendApiUrl(): string | null {
   return process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? null;
 }
 
+function shouldUseInsecureTls(): boolean {
+  const value = process.env.API_PROXY_INSECURE_TLS ?? "false";
+  return value === "true" || value === "1";
+}
+
+if (shouldUseInsecureTls()) {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+}
+
 function buildTargetUrl(request: NextRequest, backendApiUrl: string, path: string[] | undefined): string {
   const requestUrl = new URL(request.url);
   const cleanedPath = (path ?? []).filter(Boolean).map((segment) => encodeURIComponent(segment)).join("/");

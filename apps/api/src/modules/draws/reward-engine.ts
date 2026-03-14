@@ -4,6 +4,7 @@ import { selectWeightedWinner } from "@bags/shared";
 import bs58 from "bs58";
 import { env } from "../../config/env";
 import { refreshHolderStatsForToken } from "../holders/refresh";
+import { logger } from "../../services/logger";
 import {
   createDraw,
   createPayout,
@@ -21,11 +22,22 @@ export function getRewardPercent(random: number): number {
 }
 
 export async function runRewardDraw(tokenMint: string, treasuryBalance: number, random = Math.random()) {
-  await refreshHolderStatsForToken(tokenMint, new Date());
+  const refreshed = await refreshHolderStatsForToken(tokenMint, new Date());
   const tokenRuntime = await getTokenRuntimeByMint(tokenMint);
   const effectiveTreasuryBalance = Number(tokenRuntime?.treasury_balance ?? treasuryBalance ?? 0);
   const drawNumber = await getNextDrawNumber(tokenMint);
   const holders = await listHoldersByMint(tokenMint);
+  logger.info(
+    {
+      tokenMint,
+      drawNumber,
+      holderCount: holders.length,
+      refreshedHolderCount: refreshed.holderCount,
+      totalSupply: refreshed.totalSupply,
+      treasuryBalance: effectiveTreasuryBalance
+    },
+    "Running tracked token reward draw"
+  );
 
   for (const holder of holders) {
     await saveHolderScore({
@@ -88,6 +100,27 @@ export async function runRewardDraw(tokenMint: string, treasuryBalance: number, 
       latestWinnerWallet: winner.wallet,
       nextDrawAt: new Date(Date.now() + env.DRAW_INTERVAL_MINUTES * 60_000)
     });
+    logger.info(
+      {
+        tokenMint,
+        drawNumber,
+        winnerWallet: winner.wallet,
+        rewardAmount,
+        rewardPercent,
+        txSignature: payoutTxSignature,
+        dryRun: env.REWARD_DRY_RUN
+      },
+      "Tracked token reward draw completed"
+    );
+  } else {
+    logger.info(
+      {
+        tokenMint,
+        drawNumber,
+        treasuryBalance: effectiveTreasuryBalance
+      },
+      "Tracked token draw produced no eligible winner"
+    );
   }
 
   return {
@@ -122,9 +155,25 @@ async function executePayoutTransfer(recipientWallet: string, rewardAmountSol: n
     })
   );
 
+  logger.info(
+    {
+      recipientWallet,
+      rewardAmountSol,
+      payerWallet: payer.publicKey.toBase58()
+    },
+    "Sending reward payout transfer"
+  );
   const signature = await sendAndConfirmTransaction(connection, transaction, [payer], {
     commitment: "confirmed"
   });
+  logger.info(
+    {
+      recipientWallet,
+      rewardAmountSol,
+      signature
+    },
+    "Reward payout transfer confirmed"
+  );
   return signature;
 }
 

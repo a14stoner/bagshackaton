@@ -16,13 +16,34 @@ export function startDrawWorker() {
 
       const trackedTokens = await listTrackedTokensForDraws();
       const nextDrawAt = new Date(Date.now() + env.DRAW_INTERVAL_MINUTES * 60_000);
+      logger.info(
+        {
+          trackedTokenCount: trackedTokens.length,
+          nextDrawAt
+        },
+        "Starting tracked token draw iteration"
+      );
       for (const token of trackedTokens) {
         await updateTokenTreasury({
           tokenMint: token.mint,
           nextDrawAt
         });
+        logger.info(
+          {
+            tokenMint: token.mint,
+            nextDrawAt
+          },
+          "Tracked token next draw scheduled"
+        );
         const treasuryBalance = Number(token.treasury_balance ?? 0);
         if (!Number.isFinite(treasuryBalance) || treasuryBalance <= 0) {
+          logger.info(
+            {
+              tokenMint: token.mint,
+              treasuryBalance
+            },
+            "Skipping tracked token draw because treasury is empty"
+          );
           continue;
         }
 

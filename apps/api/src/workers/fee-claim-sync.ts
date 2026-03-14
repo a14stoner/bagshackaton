@@ -68,6 +68,13 @@ export class FeeClaimSyncWorker {
         return;
       }
       const receiverWallet = env.TARGET_FEE_RECEIVER_WALLET;
+      logger.info(
+        {
+          trackedTokenCount: trackedTokens.length,
+          receiverWallet
+        },
+        "Starting tracked token claimable fee sync iteration"
+      );
       const claimablePositions = await getClaimablePositions(receiverWallet);
       const positionsByMint = new Map<string, typeof claimablePositions>();
       for (const position of claimablePositions) {
@@ -100,6 +107,18 @@ export class FeeClaimSyncWorker {
     const previousLamports = previousState ? BigInt(previousState.claimable_lamports) : 0n;
     const generatedDeltaLamports = claimableLamports > previousLamports ? claimableLamports - previousLamports : 0n;
 
+    logger.info(
+      {
+        tokenMint,
+        tracked: true,
+        receiverWallet,
+        positions: tokenPositions.length,
+        previousClaimableLamports: previousLamports.toString(),
+        claimableLamports: claimableLamports.toString()
+      },
+      "Syncing tracked token claimable fees"
+    );
+
     await upsertTokenClaimableState({
       tokenMint,
       receiverWallet,
@@ -118,6 +137,14 @@ export class FeeClaimSyncWorker {
         tokenMint,
         generatedFeesDelta: generatedDeltaSol
       });
+      logger.info(
+        {
+          tokenMint,
+          generatedDeltaLamports: generatedDeltaLamports.toString(),
+          generatedDeltaSol
+        },
+        "Tracked token generated fees increased"
+      );
     }
 
     logger.info(
@@ -146,6 +173,14 @@ export class FeeClaimSyncWorker {
         tokenMint
       });
       txCount = extractTransactionCount(claimTransactions);
+      logger.info(
+        {
+          tokenMint,
+          txCount,
+          claimableSol
+        },
+        "Tracked token claim transactions requested"
+      );
       if (env.CLAIM_EXECUTE_TRANSACTIONS && this.claimer && txCount > 0) {
         txSignatures = await executeClaimTransactions(this.connection, this.claimer, claimTransactions);
         const refreshedPositions = await getClaimablePositions(receiverWallet);
@@ -173,6 +208,15 @@ export class FeeClaimSyncWorker {
             claimedFeesDelta: claimedSol,
             treasuryBalanceDelta: claimedSol
           });
+          logger.info(
+            {
+              tokenMint,
+              claimedLamports: claimedLamports.toString(),
+              claimedSol,
+              txSignatures
+            },
+            "Tracked token fees claimed and treasury updated"
+          );
         }
       }
 

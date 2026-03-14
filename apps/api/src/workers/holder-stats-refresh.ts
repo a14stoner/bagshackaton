@@ -34,7 +34,14 @@ export class HolderStatsRefreshWorker {
 
     this.inFlight = true;
     try {
-      await refreshTrackedHolderStats(new Date());
+      const refreshedTokens = await refreshTrackedHolderStats(new Date());
+      logger.info(
+        {
+          trackedTokenCount: refreshedTokens.length,
+          tokens: refreshedTokens
+        },
+        "Tracked token holder stats refreshed"
+      );
     } catch (error) {
       logger.error({ err: error }, "Holder stats refresh iteration failed");
     } finally {

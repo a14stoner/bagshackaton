@@ -33,10 +33,13 @@ function toHolderState(row: any): HolderState {
   };
 }
 
-export async function refreshHolderStatsForToken(tokenMint: string, now = new Date()): Promise<void> {
+export async function refreshHolderStatsForToken(
+  tokenMint: string,
+  now = new Date()
+): Promise<{ holderCount: number; totalSupply: number }> {
   const tokenRuntime = await getTokenRuntimeByMint(tokenMint);
   if (!tokenRuntime) {
-    return;
+    return { holderCount: 0, totalSupply: 0 };
   }
   const totalSupply = toNumber(tokenRuntime.total_supply);
   const holders = await listHoldersByMint(tokenMint);
@@ -60,11 +63,21 @@ export async function refreshHolderStatsForToken(tokenMint: string, now = new Da
       cooldownUntilDraw: refreshed.cooldownUntilDraw
     });
   }
+  return { holderCount: holders.length, totalSupply };
 }
 
-export async function refreshTrackedHolderStats(now = new Date()): Promise<void> {
+export async function refreshTrackedHolderStats(
+  now = new Date()
+): Promise<Array<{ mint: string; holderCount: number; totalSupply: number }>> {
   const tokens = await listTrackedTokensForDraws();
+  const results: Array<{ mint: string; holderCount: number; totalSupply: number }> = [];
   for (const token of tokens) {
-    await refreshHolderStatsForToken(token.mint, now);
+    const refreshed = await refreshHolderStatsForToken(token.mint, now);
+    results.push({
+      mint: token.mint,
+      holderCount: refreshed.holderCount,
+      totalSupply: refreshed.totalSupply
+    });
   }
+  return results;
 }

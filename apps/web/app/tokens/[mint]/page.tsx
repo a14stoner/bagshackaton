@@ -147,7 +147,7 @@ export default async function TokenPage({ params }: { params: Promise<{ mint: st
 
           <section className="panel">
             <h2 className="section-title">Hold Score Formula</h2>
-            <p className="mono">score = holdHours * sqrt(percentSupply) * 10 * (1 - sqrt(sellRatio))²</p>
+            <p className="mono">score = holdHours * sqrt(percentSupply) * 10 * (1 - sqrt(sellRatio))^2</p>
             <p className="muted">holdHours: how long tokens are held.</p>
             <p className="muted">percentSupply: wallet balance divided by total supply.</p>
             <p className="muted">sellRatio: sold divided by total acquired (transfers out count as sold).</p>

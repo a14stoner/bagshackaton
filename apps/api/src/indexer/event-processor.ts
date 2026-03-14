@@ -86,6 +86,12 @@ export class IndexerEventProcessor {
         return;
       }
       const resolvedReceivers = await resolveReceiversWithOwners(event.receivers);
+      const trackedReceivers = resolvedReceivers.filter((receiver) =>
+        isTrackedFeeReceiver(
+          [{ wallet: receiver.resolvedWallet, allocationBps: receiver.allocationBps }],
+          this.targetFeeReceiverWallet
+        )
+      );
       await replaceFeeReceivers({
         tokenMint: event.mint,
         receivers: resolvedReceivers.map((receiver) => ({
@@ -96,6 +102,16 @@ export class IndexerEventProcessor {
           isTarget: isTrackedFeeReceiver([{ wallet: receiver.resolvedWallet, allocationBps: receiver.allocationBps }], this.targetFeeReceiverWallet)
         }))
       });
+      logger.info(
+        {
+          mint: event.mint,
+          feeConfigAccount: event.feeConfigAccount,
+          receiverCount: resolvedReceivers.length,
+          trackedReceiverCount: trackedReceivers.length,
+          trackedReceivers
+        },
+        trackedReceivers.length > 0 ? "Tracked token fee receivers synchronized" : "Untracked token fee receivers synchronized"
+      );
     }
 
     if (event.kind === "swap") {
@@ -206,6 +222,16 @@ export class IndexerEventProcessor {
       this.holders.set(sourceKey, source);
       this.holders.set(destKey, dest);
       await Promise.all([persistHolder(event.mint, source), persistHolder(event.mint, dest)]);
+      logger.info(
+        {
+          mint: event.mint,
+          fromWallet: event.fromWallet,
+          toWallet: event.toWallet,
+          amount: event.amount,
+          signature: event.signature
+        },
+        "Tracked token transfer persisted"
+      );
     }
 
     if (event.kind === "migration") {
@@ -373,6 +399,12 @@ async function probeFeeConfigNow(mint: string): Promise<void> {
           status: "DISCOVERED"
         });
         const resolvedReceivers = await resolveReceiversWithOwners(decoded.receivers);
+        const trackedReceivers = resolvedReceivers.filter((receiver) =>
+          isTrackedFeeReceiver(
+            [{ wallet: receiver.resolvedWallet, allocationBps: receiver.allocationBps }],
+            env.TARGET_FEE_RECEIVER_WALLET
+          )
+        );
         await replaceFeeReceivers({
           tokenMint: mint,
           receivers: resolvedReceivers.map((receiver) => ({
@@ -406,6 +438,8 @@ async function probeFeeConfigNow(mint: string): Promise<void> {
             mint,
             feeConfigAccount: feeConfigAccount.toBase58(),
             receiverCount: resolvedReceivers.length,
+            trackedReceiverCount: trackedReceivers.length,
+            trackedReceivers,
             receivers: resolvedReceivers,
             dataLength: accountInfo.data.length,
             attempt
